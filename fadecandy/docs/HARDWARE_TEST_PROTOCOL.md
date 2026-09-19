@@ -198,3 +198,32 @@ Observed behavior after WebSocket sender disconnects:
 This is currently treated as hold-last-frame behavior. Decide later whether final production behavior should remain hold-last-frame or use blackout/fade on source loss.
 
 Result: the complete WebSocket -> LatestFrame -> L3D mapping -> OPC -> fcserver -> Fadecandy -> cube path is verified independently of PXLBLZ.
+
+
+### 60/120 FPS WebSocket stress verification
+
+Real-hardware stress tests using the 512-pixel logical chase:
+
+#### 60 FPS input
+
+- sender average: 59.45 fps over 1189 frames / 20 s
+- router RX: approximately 60 fps
+- replaced frames: normally 0/s, with occasional 1/s scheduling jitter
+- invalid frames: 0
+- OPC output: approximately 60 fps
+- visual output remained correct
+
+PASS.
+
+#### 120 FPS input
+
+- sender average: 118.99 fps over 2380 frames / 20 s
+- router RX: approximately 120 fps
+- replaced frames: approximately 60/s
+- invalid frames: 0
+- OPC output: approximately 60 fps
+- visual output remained correct
+
+PASS.
+
+This confirms the intended hard-real-time latest-frame behavior: when the producer outruns the 60 fps output loop, superseded frames are discarded rather than queued, so latency does not accumulate.
