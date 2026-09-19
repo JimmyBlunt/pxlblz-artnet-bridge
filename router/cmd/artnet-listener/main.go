@@ -65,8 +65,7 @@ func main() {
 		universes[p.Universe]++
 		lastSeq = p.Sequence
 		if *verbose {
-			fmt.Printf("%s U%d seq=%d channels=%d first=% x
-", from.IP, p.Universe, p.Sequence, len(p.Data), p.Data[:min(12, len(p.Data))])
+			fmt.Printf("%s U%d seq=%d channels=%d first=% x\n", from.IP, p.Universe, p.Sequence, len(p.Data), p.Data[:min(12, len(p.Data))])
 		}
 		if time.Since(last) >= time.Second {
 			printStats(total, invalid, universes, lastSeq)
