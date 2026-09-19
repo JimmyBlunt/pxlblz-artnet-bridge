@@ -23,6 +23,7 @@ func New(addr string, channel byte) *Client {
 	}
 	return &Client{addr: addr, channel: channel, timeout: 2 * time.Second}
 }
+
 func (c *Client) connectLocked() error {
 	if c.conn != nil {
 		return nil
@@ -32,7 +33,7 @@ func (c *Client) connectLocked() error {
 	if err != nil {
 		return fmt.Errorf("connect fcserver %s: %w", c.addr, err)
 	}
-	tcp, ok := conn.**net.TCPConn)
+	tcp, ok := conn.(*net.TCPConn)
 	if !ok {
 		_ = conn.Close()
 		return fmt.Errorf("fcserver connection is not TCP")
@@ -41,6 +42,7 @@ func (c *Client) connectLocked() error {
 	c.conn = tcp
 	return nil
 }
+
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -51,6 +53,7 @@ func (c *Client) Close() error {
 	}
 	return nil
 }
+
 func (c *Client) SendRGB(rgb []byte) error {
 	packet, err := opc.EncodeSetPixelColors(c.channel, rgb)
 	if err != nil {
