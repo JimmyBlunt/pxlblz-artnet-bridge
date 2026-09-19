@@ -162,3 +162,15 @@ At this point the historical L3D coordinate mapping, cube dimensions, axis orien
 Result: the complete L3D logical-to-physical mapping is verified on the real modified cube.
 
 Next gate: validate the binary WebSocket input path independently of PXLBLZ.
+
+
+### fcserver / USB / OPC connection verification
+
+Observed on Windows with the real hardware:
+
+- fcserver listening on 127.0.0.1:7890: PASS
+- Fadecandy USB device attached: PASS
+- reported firmware version: 1.07
+- incoming Open Pixel Control client connection accepted: PASS
+
+This confirms the server, USB device enumeration, and OPC TCP connection layer on the real machine.
