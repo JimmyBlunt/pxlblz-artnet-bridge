@@ -174,3 +174,27 @@ Observed on Windows with the real hardware:
 - incoming Open Pixel Control client connection accepted: PASS
 
 This confirms the server, USB device enumeration, and OPC TCP connection layer on the real machine.
+
+
+### Binary WebSocket input verification
+
+Real-hardware test using `pxlblz-frame-sender.exe` -> `ws://127.0.0.1:9981/pixels`:
+
+- 512 pixels / 1536-byte RGB frames: PASS
+- red full-frame test: PASS, entire cube displayed red
+- logical chase test: PASS, one white voxel traversed the complete cube correctly
+- WebSocket RX: stable at 30 fps during transmission
+- invalid frames: 0
+- replaced frames: 0 at 30 fps input
+- connected client count: 1 during transmission
+- OPC output: approximately 60 fps as configured
+- fcserver/Fadecandy/L3D output remained visually correct
+
+Observed behavior after WebSocket sender disconnects:
+
+- RX returns to 0 fps and client count returns to 0
+- router continues transmitting the last valid frame to fcserver at the configured output rate
+
+This is currently treated as hold-last-frame behavior. Decide later whether final production behavior should remain hold-last-frame or use blackout/fade on source loss.
+
+Result: the complete WebSocket -> LatestFrame -> L3D mapping -> OPC -> fcserver -> Fadecandy -> cube path is verified independently of PXLBLZ.
