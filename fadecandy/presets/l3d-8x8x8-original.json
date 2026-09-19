@@ -1,0 +1,8 @@
+{
+  "name": "L3D 8x8x8 original wiring",
+  "notes": "Canonical logical order x-fastest; physical output matches index = z*64 + x*8 + y.",
+  "dimensions": [8, 8, 8],
+  "input_order": ["x", "y", "z"],
+  "output_order": ["y", "x", "z"],
+  "flip": {"x": false, "y": false, "z": false}
+}
