@@ -48,10 +48,8 @@ func main() {
 	fatalIf(err)
 	defer r.Close()
 
-	fmt.Printf("PXLBLZ Art-Net Router v%s
-", version)
-	fmt.Printf("Pixels: %d (%d bytes/frame) | Art-Net FPS target: %d | UDP: %d | input: %s | dry-run: %v
-",
+	fmt.Printf("PXLBLZ Art-Net Router v%s\n", version)
+	fmt.Printf("Pixels: %d (%d bytes/frame) | Art-Net FPS target: %d | UDP: %d | input: %s | dry-run: %v\n",
 		cfg.Input.PixelCount, cfg.Input.PixelCount*3, fps, cfg.ArtNet.UDPPort, mode, *dryRun)
 	fmt.Println("Routes:")
 	for _, s := range r.RouteSummary() {
@@ -86,8 +84,7 @@ func main() {
 		actual, err := wsServer.Start()
 		fatalIf(err)
 		defer wsServer.Close()
-		fmt.Printf("Pixel input listening: ws://%s%s (binary frame = exactly %d RGB bytes)
-", actual, *wsPath, len(frame))
+		fmt.Printf("Pixel input listening: ws://%s%s (binary frame = exactly %d RGB bytes)\n", actual, *wsPath, len(frame))
 		fmt.Println("Waiting for first valid input frame before Art-Net transmission starts...")
 	}
 
@@ -128,8 +125,7 @@ func main() {
 			if mode == "ws" {
 				ist := latest.Stats()
 				wst := wsServer.Stats()
-				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send last %6.3f ms max %6.3f ms | errors %d
-",
+				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send last %6.3f ms max %6.3f ms | errors %d\n",
 					float64(ist.Submitted-lastRX), ist.Replaced-lastReplaced, ist.Invalid-lastInvalid, wst.Active,
 					txFPS, txPPS,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
@@ -137,8 +133,7 @@ func main() {
 					st.SendErrors)
 				lastRX, lastReplaced, lastInvalid = ist.Submitted, ist.Replaced, ist.Invalid
 			} else {
-				fmt.Printf("TX %5.1f fps | %5d pkt/s | frame-send last %7.3f ms max %7.3f ms | errors %d
-",
+				fmt.Printf("TX %5.1f fps | %5d pkt/s | frame-send last %7.3f ms max %7.3f ms | errors %d\n",
 					txFPS, txPPS,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
@@ -161,14 +156,11 @@ func printFinal(r *router.Router, latest *frameinput.LatestFrame, start time.Tim
 	if sec < 0.001 {
 		sec = 0.001
 	}
-	fmt.Printf("
-Final TX: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %d send errors
-",
+	fmt.Printf("\nFinal TX: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %d send errors\n",
 		st.Frames, st.Packets, float64(st.Frames)/sec, float64(st.Packets)/sec, st.SendErrors)
 	if latest != nil {
 		s := latest.Stats()
-		fmt.Printf("Final RX: %d valid frames, %d replaced before output observation, %d invalid
-", s.Submitted, s.Replaced, s.Invalid)
+		fmt.Printf("Final RX: %d valid frames, %d replaced before output observation, %d invalid\n", s.Submitted, s.Replaced, s.Invalid)
 	}
 }
 
