@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "input": {"pixel_count": 8186,"fps_target": 30},
+  "artnet": {"udp_port": 6454,"unicast": true},
+  "routes": [
+    {"name":"BACK_PANEL_249_P1","enabled":true,"target_ip":"10.0.0.253","physical_port":1,"pixel_start":1440,"pixel_count":203,"universe_start":120,"color_order":"RGB"}
+  ]
+}
