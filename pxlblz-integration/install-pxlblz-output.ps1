@@ -121,8 +121,5 @@ Write-Host "Output URL: $outputUrl"
 Write-Host "Backup: $backup"
 Write-Host "Module: $moduleDest"
 Write-Host ""
-Write-Host "After starting PXLBLZ, enable output with:" -ForegroundColor Cyan
+Write-Host "Start PXLBLZ and append this query string to the local URL it prints:" -ForegroundColor Cyan
 Write-Host "  ?pxout=1&pxoutUrl=$encodedUrl"
-Write-Host ""
-Write-Host "Example for the common Vite dev URL:"
-Write-Host "  http://localhost:5173/?pxout=1&pxoutUrl=$encodedUrl"
