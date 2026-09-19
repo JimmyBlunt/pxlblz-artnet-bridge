@@ -65,3 +65,41 @@ all 6 physical panels visibly active
 BACK_PANEL has 7 electrical outputs; P6 and P7 are two electrical lanes of the same sixth physical panel.
 
 PASS.
+
+## Direct PXLBLZ IDE integration
+
+First direct browser integration test from the real PXLBLZ IDE succeeded.
+
+Source state:
+
+```text
+PXLBLZ IDE upstream commit d685125b
+experimental ?pxout=1 adapter
+ws://127.0.0.1:9980/pixels
+8186 logical pixels / 24558 bytes per frame
+```
+
+Observed router telemetry:
+
+```text
+clients 1
+RX 60.0 fps
+replaced ~30/s
+invalid 0/s
+TX 30.0 fps
+870 pkt/s
+0 send errors
+```
+
+This proves the direct transport path:
+
+```text
+PXLBLZ render loop
+→ browser WebSocket
+→ router LatestFrame
+→ Art-Net sender
+```
+
+PASS for direct PXLBLZ-to-router transport and frame-size agreement.
+
+Physical visual correctness of the selected live PXLBLZ pattern is tracked separately from transport acceptance.
