@@ -41,3 +41,25 @@ go run ./cmd/pxlblz-fadecandy --config config/l3d-8x8x8.json --input pattern --p
 
 `axes` draws red +X, green +Y and blue +Z from a white origin. It is the fastest
 way to identify the real cube orientation before touching any PXLBLZ code.
+
+## Windows first-light
+
+For a controlled hardware bring-up, use the direct physical probe before L3D mapping or PXLBLZ integration.
+
+See:
+
+- `docs/WINDOWS_FCSERVER_SETUP.md`
+- `docs/HARDWARE_TEST_PROTOCOL.md`
+
+Quick install:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-fcserver.ps1
+.\bin\fcserver.exe .\config\fcserver-l3d.json
+```
+
+Then, in a second terminal from the repository root:
+
+```powershell
+.\bin\windows-x64\fadecandy-probe.exe --mode pixel --pixel 0 --color red --hex
+```
