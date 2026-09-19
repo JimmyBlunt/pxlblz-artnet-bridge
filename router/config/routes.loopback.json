@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "input": {"pixel_count": 8000,"fps_target": 60},
+  "artnet": {"udp_port": 6454,"unicast": true},
+  "routes": [
+    {"name":"loopback-all","enabled":true,"target_ip":"127.0.0.1","physical_port":1,"pixel_start":0,"pixel_count":8000,"universe_start":0,"color_order":"RGB"}
+  ]
+}
