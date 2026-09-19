@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "input": {"pixel_count": 8186,"fps_target": 30},
+  "artnet": {"udp_port": 6454,"unicast": true},
+  "routes": [
+    {"name":"BACK_PANEL_249_P1_SAFE_CHASE","enabled":true,"target_ip":"10.0.0.253","physical_port":1,"pixel_start":0,"pixel_count":203,"universe_start":120,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P2","enabled":true,"target_ip":"10.0.0.253","physical_port":2,"pixel_start":3744,"pixel_count":738,"universe_start":122,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P3","enabled":true,"target_ip":"10.0.0.253","physical_port":3,"pixel_start":4482,"pixel_count":880,"universe_start":127,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P4","enabled":true,"target_ip":"10.0.0.253","physical_port":4,"pixel_start":5362,"pixel_count":810,"universe_start":133,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P5","enabled":true,"target_ip":"10.0.0.253","physical_port":5,"pixel_start":6172,"pixel_count":352,"universe_start":139,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P6","enabled":true,"target_ip":"10.0.0.253","physical_port":6,"pixel_start":6524,"pixel_count":610,"universe_start":142,"color_order":"RGB"},
+    {"name":"BACK_PANEL_249_P7","enabled":true,"target_ip":"10.0.0.253","physical_port":7,"pixel_start":7134,"pixel_count":512,"universe_start":146,"color_order":"RGB"}
+  ]
+}
