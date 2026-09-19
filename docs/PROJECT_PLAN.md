@@ -2,8 +2,8 @@
 
 ## Status
 
-**2026-09-20:** standalone router and binary WebSocket live-input path are hardware verified.  
-**Active milestone:** connect the PXLBLZ IDE render loop directly to `ws://127.0.0.1:9980/pixels`.
+**2026-09-20:** standalone router, binary WebSocket live-input path, and direct PXLBLZ IDE browser output are transport-verified.  
+**Active milestone:** visually verify mapped PXLBLZ pattern output on the real installation, then move from experimental `?pxout=1` control toward a proper PXLBLZ output UI.
 
 ## Core architecture
 
@@ -160,6 +160,42 @@ TX 30 FPS
 ```
 
 This proves LatestFrame semantics and fully separates input/render FPS from controller TX FPS.
+
+### H7 — direct PXLBLZ IDE browser output
+
+PXLBLZ IDE was launched from upstream commit `d685125b` with the experimental `?pxout=1` adapter enabled.
+
+Observed router telemetry:
+
+```text
+clients 1
+RX 60.0 fps
+replaced ~30/s
+invalid 0/s
+TX 30.0 fps
+870 pkt/s
+0 send errors
+```
+
+The router accepted the exact expected frame size:
+
+```text
+8186 pixels
+24558 RGB bytes/frame
+```
+
+This verifies the direct software transport chain:
+
+```text
+PXLBLZ render loop
+→ browser WebSocket
+→ LatestFrame
+→ Art-Net router
+```
+
+PASS for direct PXLBLZ transport and pixel-count agreement.
+
+The next confirmation is visual content correctness on the physical panels using a deliberately recognizable PXLBLZ pattern and the intended installation map.
 
 ## Hard real-time rule
 
