@@ -122,12 +122,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if _, err := fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Accept: %s
-
-", acceptForKey(key)); err != nil {
+	if _, err := fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acceptForKey(key)); err != nil {
 		_ = conn.Close()
 		return
 	}
@@ -164,6 +159,7 @@ Sec-WebSocket-Accept: %s
 				return
 			}
 		case 0xA:
+			// pong
 		default:
 			s.protocolErr.Add(1)
 			_ = writeClose(conn, 1003, "binary frames only")
@@ -277,6 +273,8 @@ func writeFrame(w io.Writer, opcode byte, payload []byte, mask bool) error {
 	return err
 }
 
+// Client is a minimal browser-compatible websocket client used by the standalone
+// frame generator and tests. Production PXLBLZ will use the browser WebSocket API.
 type Client struct {
 	conn net.Conn
 	br   *bufio.Reader
@@ -296,21 +294,13 @@ func Dial(urlHost, path string) (*Client, error) {
 		return nil, err
 	}
 	key := base64.StdEncoding.EncodeToString(keyRaw)
-	req := fmt.Sprintf("GET %s HTTP/1.1
-Host: %s
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Key: %s
-Sec-WebSocket-Version: 13
-
-", path, urlHost, key)
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, urlHost, key)
 	if _, err := io.WriteString(conn, req); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	br := bufio.NewReader(conn)
-	status, err := br.ReadString('
-')
+	status, err := br.ReadString('\n')
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -321,14 +311,12 @@ Sec-WebSocket-Version: 13
 	}
 	headers := map[string]string{}
 	for {
-		line, err := br.ReadString('
-')
+		line, err := br.ReadString('\n')
 		if err != nil {
 			conn.Close()
 			return nil, err
 		}
-		if line == "
-" {
+		if line == "\r\n" {
 			break
 		}
 		p := strings.SplitN(line, ":", 2)
