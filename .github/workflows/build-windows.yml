@@ -1,0 +1,53 @@
+name: Build and commit Windows binaries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'router/**/*.go'
+      - 'router/go.mod'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Run tests
+        working-directory: router
+        run: go test ./...
+
+      - name: Build Windows x64 binaries
+        shell: bash
+        run: |
+          mkdir -p bin/windows-x64
+          cd router
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/pxlblz-router.exe ./cmd/pxlblz-router
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/pxlblz-frame-sender.exe ./cmd/pxlblz-frame-sender
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/artnet-listener.exe ./cmd/artnet-listener
+          cd ..
+          sha256sum bin/windows-x64/*.exe > bin/windows-x64/SHA256SUMS.txt
+
+      - name: Commit binaries
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin/windows-x64
+          if git diff --cached --quiet; then
+            echo "Binaries unchanged."
+            exit 0
+          fi
+          git commit -m "Build Windows x64 binaries [skip ci]"
+          git push
