@@ -6,12 +6,12 @@ The same PXLBLZ-side code is used for both verified native output daemons:
 
 ```text
 PXLBLZ render loop
-      ‚Üì one packed Float64 RGB frame
+      -> one packed Float64 RGB frame
 normal preview + ExternalPixelOutput
-      ‚Üì one reusable RGB888 conversion
+      -> one reusable RGB888 conversion
 browser WebSocket
-      ‚îú‚îÄ ws://127.0.0.1:9980/pixels -> Art-Net router
-      ‚îî‚îÄ ws://127.0.0.1:9981/pixels -> Fadecandy/L3D router
+      -> ws://127.0.0.1:9980/pixels -> Art-Net router
+      -> ws://127.0.0.1:9981/pixels -> Fadecandy/L3D router
 ```
 
 There is no canvas readback, no second pattern render and no duplicate logical mapping stage.
@@ -27,10 +27,10 @@ powershell -ExecutionPolicy Bypass -File .\pxlblz-integration\install-pxlblz-out
 Available targets:
 
 - `fadecandy` -> `ws://127.0.0.1:9981/pixels`
-- `artnet` -> `ws://127.0.0.0.1:9980/pixels`
-- ``custom` -> pass `-CustomUrl "ws://host:port/path"`
+- `artnet` -> `ws://127.0.0.1:9980/pixels`
+- `custom` -> pass `-CustomUrl "ws://host:port/path"`
 
-The installer checks the expected PXLBLZ source anchors, creates a timestamped backup of `Preview.tsx`, copies `externalPixelOutput.ts` into `src/engine`, wires the existing `paintPacked` render path into the preview, keeps hardware output opt-in, and prints the exact URL/query parameters for the selected target.
+The installer checks the expected PXLBLZ source anchors, creates a timestamped backup of `Preview.tsx`, copies `externalPixelOutput.ts` into `src/engine`, wires the existing `paintPacked` render path into the preview, keeps hardware output opt-in, and prints the exact query string for the selected target.
 
 The reviewed upstream PXLBLZ revision is:
 
@@ -54,10 +54,12 @@ cd fadecandy
 ..\bin\windows-x64\pxlblz-fadecandy.exe --config .\config\l3d-8x8x8.json --input ws
 ```
 
-Then run PXLBLZ with the stock 8x8x8 cube map and 512 pixels and open:
+Then run PXLBLZ with the stock 8x8x8 cube map and 512 pixels.
+
+Append this query string to whatever local URL PXLBLZ prints:
 
 ```text
-http://localhost:5173/?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9981%2Fpixels
+?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9981%2Fpixels
 ```
 
 The Fadecandy router must report:
@@ -72,10 +74,10 @@ and the physical cube should match the PXLBLZ preview.
 
 ## Art-Net target
 
-The same patched PXLBLZ build can instead point at the verified Art-Net router:
+The same patched PXLBLZ build can instead point at the verified Art-Net router with:
 
 ```text
-http://localhost:5173/?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9980%2Fpixels
+?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9980%2Fpixels
 ```
 
 No second PXLBLZ integration is required.
@@ -90,4 +92,14 @@ PXLBLZ preview brightness and dimmed state are not currently applied to hardware
 
 Browser WebSocket backpressure is lossy by design. If one complete RGB frame is already buffered, the next render frame is skipped rather than queued.
 
-The native router then applies a second LatestFrame layer. Thh»ŸY\»›]]]ôH[ú›XYŸàXÿ›[][][ô»[ö[X][€à][òﬁKÇÇà»»õŸX›[€àòYXÿ[ôH[ù\ú€][€ÇÇïHõ‹õX[òYXÿ[ôH€€ôöY»ŸY\ŒÇÇòú€€Çàö[ù\ú€]HéàùYBòÇïHõÀZ[ù\ú€][€à€€ôöY»ô[XZ[ú»€õH\»HXY€õ‹›X»‹[€àõ‹à^X›\ãYúò[YHY[ù]H\›ÀÇ
+The native router then applies a second LatestFrame layer. This keeps output live instead of accumulating animation latency.
+
+## Production Fadecandy interpolation
+
+The normal Fadecandy config keeps:
+
+```json
+"interpolate": true
+```
+
+The no-interpolation config remains only as a diagnostic option for exact per-frame identity tests.
