@@ -140,3 +140,13 @@ Next verification: test indices 0, 7, 8, 56 and 63 inside one plane to confirm t
   - common origin at left/bottom/back
 
 The configured historical L3D mapping is therefore confirmed on the real modified cube.
+
+
+### Corner and layer verification
+
+- eight-corner logical pattern: PASS
+- all eight logical cube corners appeared at the expected physical cube corners
+- moving 8x8 layer pattern: PASS
+- layer order and direction matched the expected back-to-front Z progression
+
+At this point the historical L3D coordinate mapping, cube dimensions, axis orientation, and plane progression are confirmed on the real hardware.
