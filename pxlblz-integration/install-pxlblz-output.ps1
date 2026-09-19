@@ -1,6 +1,11 @@
 param(
   [Parameter(Mandatory=$true)]
-  [string]$PxlblzPath
+  [string]$PxlblzPath,
+
+  [ValidateSet("fadecandy","artnet","custom")]
+  [string]$Target = "fadecandy",
+
+  [string]$CustomUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,13 +23,23 @@ if (!(Test-Path $moduleSource)) {
   throw "Integration module not found: $moduleSource"
 }
 
+switch ($Target) {
+  "fadecandy" { $outputUrl = "ws://127.0.0.1:9981/pixels" }
+  "artnet"    { $outputUrl = "ws://127.0.0.1:9980/pixels" }
+  "custom" {
+    if ([string]::IsNullOrWhiteSpace($CustomUrl)) {
+      throw "-CustomUrl is required when -Target custom is selected."
+    }
+    $outputUrl = $CustomUrl.Trim()
+  }
+}
+
 $text = Get-Content $preview -Raw
 
 $importAnchor = "import { createVirtualClock } from '@/engine/virtualClock'"
 $layoutAnchor = "    const { mapPoints, pixelCount, draw } = layout"
-$cleanupAnchor = "    return () => loop.stop()"
 
-foreach ($anchor in @($importAnchor, $layoutAnchor, $cleanupAnchor)) {
+foreach ($anchor in @($importAnchor, $layoutAnchor)) {
   if (!$text.Contains($anchor)) {
     throw "Expected PXLBLZ source anchor not found. No changes made: $anchor"
   }
@@ -38,27 +53,21 @@ Copy-Item $moduleSource $moduleDest -Force
 if (!$text.Contains("createExternalPixelOutput")) {
   $text = $text.Replace(
     $importAnchor,
-    "$importAnchor`r`nimport { createExternalPixelOutput } from '@/engine/externalPixelOutput'"
+    "$importAnchor`nimport { createExternalPixelOutput } from '@/engine/externalPixelOutput'"
   )
 }
 
 if (!$text.Contains("pixelCountCap === null ? createExternalPixelOutput(pixelCount)")) {
   $text = $text.Replace(
     $layoutAnchor,
-    "$layoutAnchor`r`n    const externalPixelOutput =`r`n      pixelCountCap === null ? createExternalPixelOutput(pixelCount) : null"
+    "$layoutAnchor`n    const externalPixelOutput =`n      pixelCountCap === null ? createExternalPixelOutput(pixelCount) : null"
   )
 }
 
-$oldPaintEnd = @'
-      captureRef.current.afterPaint(canvasRef.current)
-    }
-
-    const loop = createRenderLoop({
-'@
-
-$newPaintEnd = @'
-      captureRef.current.afterPaint(canvasRef.current)
-    }
+if (!$text.Contains("const paintPacked = externalPixelOutput?.enabled")) {
+  $paintPattern = '(?ms)(    const paint = \(pixels: \[number, number, number\]\[\], brightness: number, dimmed: boolean\) => \{.*?^    \})\r?\n\r?\n(    const loop = createRenderLoop\(\{)'
+  $paintInsert = @'
+$1
 
     const paintPacked = externalPixelOutput?.enabled
       ? (frame: Float64Array, brightness: number, dimmed: boolean) => {
@@ -73,35 +82,47 @@ $newPaintEnd = @'
         }
       : undefined
 
-    const loop = createRenderLoop({
+$2
 '@
-
-if (!$text.Contains("const paintPacked = externalPixelOutput?.enabled")) {
-  if (!$text.Contains($oldPaintEnd)) {
+  $next = [regex]::Replace($text, $paintPattern, $paintInsert, 1)
+  if ($next -eq $text) {
     throw "Paint integration anchor not found. Backup exists at $backup"
   }
-  $text = $text.Replace($oldPaintEnd, $newPaintEnd)
+  $text = $next
 }
 
 if (!$text.Contains("      paintPacked,")) {
-  $text = $text.Replace(
-    "      paint,`r`n      onError:",
-    "      paint,`r`n      paintPacked,`r`n      onError:"
-  )
+  $paintArgPattern = '(?m)^      paint,\r?$'
+  $next = [regex]::Replace($text, $paintArgPattern, "      paint,`n      paintPacked,", 1)
+  if ($next -eq $text) {
+    throw "Render-loop paint argument anchor not found. Backup exists at $backup"
+  }
+  $text = $next
 }
 
-if ($text.Contains($cleanupAnchor)) {
-  $text = $text.Replace(
-    $cleanupAnchor,
-    "    return () => {`r`n      loop.stop()`r`n      externalPixelOutput?.close()`r`n    }"
-  )
+if (!$text.Contains("externalPixelOutput?.close()")) {
+  $cleanupPattern = '(?m)^    return \(\) => loop\.stop\(\)\r?$'
+  $cleanupReplacement = "    return () => {`n      loop.stop()`n      externalPixelOutput?.close()`n    }"
+  $next = [regex]::Replace($text, $cleanupPattern, $cleanupReplacement, 1)
+  if ($next -eq $text) {
+    throw "Render-loop cleanup anchor not found. Backup exists at $backup"
+  }
+  $text = $next
 }
 
 Set-Content -Path $preview -Value $text -Encoding utf8
 
+$encodedUrl = [System.Uri]::EscapeDataString($outputUrl)
+
 Write-Host ""
-Write-Host "PXLBLZ external pixel output installed."
+Write-Host "PXLBLZ external pixel output installed." -ForegroundColor Green
+Write-Host "Target: $Target"
+Write-Host "Output URL: $outputUrl"
 Write-Host "Backup: $backup"
 Write-Host "Module: $moduleDest"
 Write-Host ""
-Write-Host "Start PXLBLZ normally, then open it with ?pxout=1 to enable hardware output."
+Write-Host "After starting PXLBLZ, enable output with:" -ForegroundColor Cyan
+Write-Host "  ?pxout=1&pxoutUrl=$encodedUrl"
+Write-Host ""
+Write-Host "Example for the common Vite dev URL:"
+Write-Host "  http://localhost:5173/?pxout=1&pxoutUrl=$encodedUrl"

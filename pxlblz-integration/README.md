@@ -1,84 +1,93 @@
 # PXLBLZ IDE integration
 
-This directory contains the first experimental direct output adapter from
-PXLBLZ IDE to `pxlblz-router.exe`.
+This directory contains the shared experimental external pixel output adapter for PXLBLZ IDE.
 
-## Goal
+The same PXLBLZ-side code is used for both verified native output daemons:
 
 ```text
 PXLBLZ render loop
-      ‚Üì one rendered packed Float64 RGB frame
-      ‚îú‚îÄ normal PXLBLZ WebGL preview
-      ‚îî‚îÄ Float RGB ‚Üí reusable RGB888 buffer
-                    ‚Üì
-             browser WebSocket
-       ws://127.0.0.1:9980/pixels
-                    ‚Üì
-             pxlblz-router.exe
-                    ‚Üì
-                  Art-Net
+      ‚Üì one packed Float64 RGB frame
+normal preview + ExternalPixelOutput
+      ‚Üì one reusable RGB888 conversion
+browser WebSocket
+      ‚îú‚îÄ ws://127.0.0.1:9980/pixels -> Art-Net router
+      ‚îî‚îÄ ws://127.0.0.1:9981/pixels -> Fadecandy/L3D router
 ```
 
-There is **no canvas readback**, no second pattern render and no duplicate 3D
-mapping stage.
+There is no canvas readback, no second pattern render and no duplicate logical mapping stage.
 
-## First prototype behaviour
+## Install
 
-Output is deliberately opt-in:
+From the bridge repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pxlblz-integration\install-pxlblz-output.ps1 -PxlblzPath "C:\path\to\PXLBLZ-IDE" -Target fadecandy
+```
+
+Available targets:
+
+- `fadecandy` -> `ws://127.0.0.1:9981/pixels`
+- `artnet` -> `ws://127.0.0.0.1:9980/pixels`
+- ``custom` -> pass `-CustomUrl "ws://host:port/path"`
+
+The installer checks the expected PXLBLZ source anchors, creates a timestamped backup of `Preview.tsx`, copies `externalPixelOutput.ts` into `src/engine`, wires the existing `paintPacked` render path into the preview, keeps hardware output opt-in, and prints the exact URL/query parameters for the selected target.
+
+The reviewed upstream PXLBLZ revision is:
 
 ```text
-?pxout=1
+d685125b34c694f311972e258efb48d12cf05cd8
 ```
 
-Example when PXLBLZ is running on Vite's usual local URL:
+## Fadecandy/L3D first live test
+
+Start the already hardware-verified lower stack:
+
+```powershell
+cd fadecandy
+.\bin\fcserver.exe .\config\fcserver-l3d.json
+```
+
+Second terminal:
+
+```powershell
+cd fadecandy
+..\bin\windows-x64\pxlblz-fadecandy.exe --config .\config\l3d-8x8x8.json --input ws
+```
+
+Then run PXLBLZ with the stock 8x8x8 cube map and 512 pixels and open:
 
 ```text
-http://localhost:5173/?pxout=1
+http://localhost:5173/?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9981%2Fpixels
 ```
 
-The default router endpoint is:
+The Fadecandy router must report:
 
 ```text
-ws://127.0.0.1:9980/pixels
+clients 1
+RX > 0 fps
+invalid 0/s
 ```
 
-An alternate endpoint can be supplied for development:
+and the physical cube should match the PXLBLZ preview.
+
+## Art-Net target
+
+The same patched PXLBLZ build can instead point at the verified Art-Net router:
 
 ```text
-?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9980%2Fpixels
+http://localhost:5173/?pxout=1&pxoutUrl=ws%3A%2F%2F127.0.0.1%3A9980%2Fpixels
 ```
 
-## Important prototype decisions
+No second PXLBLZ integration is required.
 
-- Output is enabled only for the full-resolution Preview instance.
-- Normal PXLBLZ behaviour is unchanged when `pxout` is absent.
-- The adapter sends canonical raw pattern RGB, clamped to 0..1 then converted
-  to RGB888.
-- The PXLBLZ preview brightness/dimmed renderer controls are **not applied to
-  hardware output in this first prototype**. Brightness ownership remains a
-  deferred design decision in the project plan.
-- Browser WebSocket backpressure is lossy by design. If one whole RGB frame is
-  already buffered, a new render frame is skipped instead of queued.
-- The native router adds a second LatestFrame layer, so slow controllers never
-  accumulate old animation frames.
+## Brightness
 
-## Installation
+The first prototype deliberately sends canonical raw pattern RGB from the packed render frame.
 
-Use `install-pxlblz-output.ps1` from PowerShell, or apply
-`Preview.integration.md` manually.
+PXLBLZ preview brightness and dimmed state are not currently applied to hardware output. Brightness ownership remains a separate design decision.
 
-The installer expects the current upstream PXLBLZ Preview structure that was
-reviewed around commit `d685125b34c694f311972e258efb48d12cf05cd8`.
-It creates a backup of `Preview.tsx` before editing it.
+## Real-time behavior
 
-## Router test command
+Browser WebSocket backpressure is lossy by design. If one complete RGB frame is already buffered, the next render frame is skipped rather than queued.
 
-Start the already hardware-verified BACK_PANEL router:
-
-```bat
-pxlblz-router.exe --config config\routes.backpanel-all.json --input ws
-```
-
-Then open PXLBLZ with `?pxout=1`.
-
-The router should report a client and valid RX frames before Art-Net starts.
+The native router then applies a second LatestFrame layer. Thh»ŸY\»›]]]ôH[ú›XYŸàXÿ›[][][ô»[ö[X][€à][òﬁKÇÇà»»õŸX›[€àòYXÿ[ôH[ù\ú€][€ÇÇïHõ‹õX[òYXÿ[ôH€€ôöY»ŸY\ŒÇÇòú€€Çàö[ù\ú€]HéàùYBòÇïHõÀZ[ù\ú€][€à€€ôöY»ô[XZ[ú»€õH\»HXY€õ‹›X»‹[€àõ‹à^X›\ãYúò[YHY[ù]H\›ÀÇ
