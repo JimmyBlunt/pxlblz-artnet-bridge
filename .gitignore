@@ -1,0 +1,5 @@
+# Local build output
+router/dist/
+router/*.exe
+*.tmp
+*.log
