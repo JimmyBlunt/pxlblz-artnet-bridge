@@ -24,7 +24,7 @@ physical LEDs
 - Art-Net universe routing with receiver-compatible even-length final payloads
 - BACK_PANEL_249 hardware test passed across all **7 electrical outputs / 6 physical panels**
 - External sender 60 FPS → router 30 FPS → 29 Art-Net universes → real LEDs: PASS
-- Next milestone: direct PXLBLZ IDE render-frame integration
+- Experimental direct PXLBLZ IDE render-frame adapter is now included under `pxlblz-integration/`
 
 ## Repository layout
 
@@ -47,6 +47,12 @@ docs/
 
 controller-reference/
   BACK_PANEL_249_RECEIVER.md
+
+pxlblz-integration/
+  src/externalPixelOutput.ts
+  install-pxlblz-output.ps1
+  Preview.integration.md
+  README.md
 
 .github/workflows/
   build-windows.yml
