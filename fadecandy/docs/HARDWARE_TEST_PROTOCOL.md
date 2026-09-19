@@ -150,3 +150,15 @@ The configured historical L3D mapping is therefore confirmed on the real modifie
 - layer order and direction matched the expected back-to-front Z progression
 
 At this point the historical L3D coordinate mapping, cube dimensions, axis orientation, and plane progression are confirmed on the real hardware.
+
+
+### Full logical voxel walk
+
+- logical voxel walk through all 512 positions: PASS
+- exactly one voxel was active at a time
+- all physical LEDs were reached
+- no incorrect plane jumps, duplicate positions, or missing positions were observed
+
+Result: the complete L3D logical-to-physical mapping is verified on the real modified cube.
+
+Next gate: validate the binary WebSocket input path independently of PXLBLZ.
