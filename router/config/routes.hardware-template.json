@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "input": {"pixel_count": 7500,"fps_target": 60},
+  "artnet": {"udp_port": 6454,"unicast": true},
+  "routes": [
+    {"name":"controller1-port1","enabled":false,"target_ip":"127.0.0.1","physical_port":1,"pixel_start":0,"pixel_count":500,"universe_start":0,"color_order":"RGB"},
+    {"name":"teensy-port1","enabled":false,"target_ip":"127.0.0.1","physical_port":1,"pixel_start":1500,"pixel_count":450,"universe_start":20,"color_order":"RGB"},
+    {"name":"esp-apa-port1","enabled":false,"target_ip":"127.0.0.1","physical_port":1,"pixel_start":6500,"pixel_count":500,"universe_start":60,"color_order":"RGB"}
+  ]
+}
