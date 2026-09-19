@@ -24,18 +24,20 @@ func main() {
 	fps := flag.Int("fps", 60, "input frame rate")
 	duration := flag.Duration("duration", 10*time.Second, "run duration (0 = until Ctrl-C)")
 	flag.Parse()
+
 	cfg, err := cfgpkg.Load(*configPath)
 	fatal(err)
 	if *fps < 1 || *fps > 240 {
 		fatal(fmt.Errorf("fps must be 1..240"))
 	}
+
 	c, err := wsmini.Dial(*target, *path)
 	fatal(err)
 	defer c.Close()
-	fmt.Printf("PXLBLZ Frame Sender v%s -> ws://%s%s
-", version, *target, *path)
-	fmt.Printf("Pixels: %d (%d bytes/frame) | input FPS: %d | pattern: %s
-", cfg.Input.PixelCount, cfg.Input.PixelCount*3, *fps, *patternName)
+
+	fmt.Printf("PXLBLZ Frame Sender v%s -> ws://%s%s\n", version, *target, *path)
+	fmt.Printf("Pixels: %d (%d bytes/frame) | input FPS: %d | pattern: %s\n", cfg.Input.PixelCount, cfg.Input.PixelCount*3, *fps, *patternName)
+
 	frame := make([]byte, cfg.Input.PixelCount*3)
 	ticker := time.NewTicker(time.Second / time.Duration(*fps))
 	defer ticker.Stop()
@@ -47,6 +49,7 @@ func main() {
 	if *duration > 0 {
 		stop = time.After(*duration)
 	}
+
 	var n, last uint64
 	started := time.Now()
 	for {
@@ -61,8 +64,7 @@ func main() {
 			fatal(c.SendBinary(frame))
 			n++
 		case <-statsTicker.C:
-			fmt.Printf("WS TX %5.1f fps | frames %d
-", float64(n-last), n)
+			fmt.Printf("WS TX %5.1f fps | frames %d\n", float64(n-last), n)
 			last = n
 		case <-sig:
 			printFinal(n, started)
@@ -73,14 +75,15 @@ func main() {
 		}
 	}
 }
+
 func printFinal(n uint64, start time.Time) {
 	sec := time.Since(start).Seconds()
 	if sec < .001 {
 		sec = .001
 	}
-	fmt.Printf("Final: %d frames, %.2f avg fps
-", n, float64(n)/sec)
+	fmt.Printf("Final: %d frames, %.2f avg fps\n", n, float64(n)/sec)
 }
+
 func fatal(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", strings.TrimSpace(err.Error()))
