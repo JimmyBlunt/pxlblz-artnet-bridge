@@ -127,3 +127,16 @@ Interpretation so far:
 - each new plane begins at its left/bottom corner and ends at its right/top corner.
 
 Next verification: test indices 0, 7, 8, 56 and 63 inside one plane to confirm the exact x/y traversal.
+
+
+### L3D mapper verification
+
+- physical plane/index orientation: PASS
+- logical XYZ axis mapping through `pxlblz-fadecandy`: PASS
+- observed axes:
+  - +X left -> right
+  - +Y bottom -> top
+  - +Z back -> front
+  - common origin at left/bottom/back
+
+The configured historical L3D mapping is therefore confirmed on the real modified cube.
