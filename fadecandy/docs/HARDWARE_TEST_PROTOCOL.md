@@ -227,3 +227,25 @@ PASS.
 PASS.
 
 This confirms the intended hard-real-time latest-frame behavior: when the producer outruns the 60 fps output loop, superseded frames are discarded rather than queued, so latency does not accumulate.
+
+
+### 120 FPS visual A/B test with interpolation disabled
+
+An initial 120 FPS single-voxel chase appeared to leave the first column visually present.
+
+A/B verification was performed using:
+
+- identical 120 FPS WebSocket input;
+- identical L3D mapping and OPC output;
+- Fadecandy interpolation disabled via `fcserver-l3d-no-interpolate.json`.
+
+Result:
+
+- all pixels displayed as expected;
+- no persistent first-column artifact;
+- no visible dropouts;
+- transport behavior remained correct.
+
+Conclusion: the earlier visual artifact was caused by the interaction of the high-speed single-pixel chase, 120 -> 60 fps frame sampling, and Fadecandy frame interpolation. It was not a logical mapping, WebSocket, LatestFrame, OPC, or physical wiring fault.
+
+For diagnostic tests, interpolation-off is preferred when exact per-frame pixel identity matters. For normal animation output, interpolation may remain enabled when the smoother visual result is desired.
