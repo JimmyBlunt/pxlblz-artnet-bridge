@@ -100,3 +100,30 @@ For each test record:
 - whether output was stable or flickering
 
 Do not adjust L3D mapping to compensate for failures in H0-H4. These tests operate below the mapping layer.
+
+
+## Observed hardware results
+
+### 2026-09-20 - L3D physical boundary test
+
+Observed on the modified L3D cube:
+
+- physical pixel 63: first/back 8x8 plane, right/top end
+- physical pixel 64: second plane from the back, left/bottom start
+- physical pixel 127: second plane from the back, right/top end
+- physical pixel 128: third plane from the back, left/bottom start
+
+This strongly matches the historical L3D physical indexing contract:
+
+```text
+physical = z*64 + x*8 + y
+```
+
+Interpretation so far:
+
+- each 64-pixel Fadecandy block is one complete 8x8 cube plane;
+- z advances one plane every 64 pixels;
+- plane order advances from back toward front;
+- each new plane begins at its left/bottom corner and ends at its right/top corner.
+
+Next verification: test indices 0, 7, 8, 56 and 63 inside one plane to confirm the exact x/y traversal.
