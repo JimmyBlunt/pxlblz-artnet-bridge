@@ -17,7 +17,10 @@ import (
 	"pxlblz-fadecandy/internal/wsinput"
 )
 
-const version = "0.1.0-dev"
+const version = "0.1.1-dev"
+
+// Bound incoming allocations independently of the physical output size.
+const maxInputFrameBytes = 16 * 1024 * 1024
 
 func main() {
 	configPath := flag.String("config", "config/l3d-8x8x8.json", "configuration JSON")
@@ -40,7 +43,7 @@ func main() {
 	var server *wsinput.Server
 	actual := "disabled"
 	if mode == "ws" {
-		server, err = wsinput.New(cfg.Input.WSListen, cfg.Input.WSPath, frameBytes, func(p []byte) { _ = latest.Submit(p) })
+		server, err = wsinput.New(cfg.Input.WSListen, cfg.Input.WSPath, maxInputFrameBytes, func(p []byte) { _ = latest.Submit(p) })
 		fatal(err)
 		actual, err = server.Start()
 		fatal(err)
@@ -51,7 +54,8 @@ func main() {
 
 	fmt.Printf("PXLBLZ Fadecandy/L3D Router v%s\n", version)
 	if mode == "ws" {
-		fmt.Printf("Input: ws://%s%s | %d pixels / %d RGB bytes | %d fps target\n", actual, cfg.Input.WSPath, cfg.Input.PixelCount, frameBytes, cfg.Input.FPSTarget)
+		fmt.Printf("Input: ws://%s%s | variable RGB pixel count, max %d bytes | %d fps target\n", actual, cfg.Input.WSPath, maxInputFrameBytes, cfg.Input.FPSTarget)
+		fmt.Printf("Frame fit: first %d pixels, truncate excess / pad missing with black\n", cfg.Input.PixelCount)
 	} else {
 		fmt.Printf("Input: built-in pattern %s | %d pixels | %d fps target\n", *patternName, cfg.Input.PixelCount, cfg.Input.FPSTarget)
 	}

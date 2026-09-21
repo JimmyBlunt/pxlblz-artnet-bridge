@@ -25,21 +25,24 @@ type Stats struct {
 }
 
 func New(size int) (*LatestFrame, error) {
-	if size <= 0 {
-		return nil, fmt.Errorf("frame size must be > 0")
+	if size <= 0 || size%3 != 0 {
+		return nil, fmt.Errorf("frame size must be a positive multiple of 3 RGB bytes")
 	}
 	return &LatestFrame{buf: make([]byte, size)}, nil
 }
 func (l *LatestFrame) Submit(frame []byte) error {
-	if len(frame) != len(l.buf) {
+	if len(frame) == 0 || len(frame)%3 != 0 {
 		l.invalid.Add(1)
-		return fmt.Errorf("frame length %d, expected %d", len(frame), len(l.buf))
+		return fmt.Errorf("frame length %d must contain complete RGB pixels", len(frame))
 	}
 	l.mu.Lock()
 	if l.have && l.gen != l.consumed {
 		l.replaced.Add(1)
 	}
-	copy(l.buf, frame)
+	// Keep the first output-sized set of logical pixels. Clear unused LEDs
+	// on shorter frames so they do not retain colors from the previous frame.
+	n := copy(l.buf, frame)
+	clear(l.buf[n:])
 	l.gen++
 	l.have = true
 	l.mu.Unlock()

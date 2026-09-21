@@ -6,8 +6,9 @@ Independent experimental output path for driving an 8x8x8 L3D cube through
 Data path:
 
 ```text
-PXLBLZ-IDE logical RGB frame (512 pixels)
+PXLBLZ-IDE logical RGB frame (variable pixel count)
   -> localhost binary WebSocket
+  -> truncate / black-pad to 512 logical pixels
   -> L3D logical-to-physical mapper
   -> OPC Set Pixel Colors over TCP
   -> fcserver :7890
@@ -17,6 +18,14 @@ PXLBLZ-IDE logical RGB frame (512 pixels)
 
 The default mapping assumes canonical logical order x-fastest and reproduces the
 original L3D physical formula `physical = z*64 + x*8 + y`.
+
+Maps and preview pixel counts can be changed freely. The bridge takes the first
+512 logical pixels from larger frames and fills missing pixels in smaller frames
+with black, including clearing colors left by the previous frame. It then applies
+the existing L3D wiring map. This crops the input; it does not spatially rescale it.
+The configured `input.pixel_count` remains the fixed output/mapping size.
+Empty frames and incomplete RGB triplets are rejected. Incoming WebSocket payloads
+are bounded to 16 MiB independently of the output size.
 
 ## Local development
 

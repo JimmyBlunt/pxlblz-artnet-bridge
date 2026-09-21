@@ -1,5 +1,6 @@
 74df8f310e148fbfbce4184540ac32616aa86a38efe16343fac15cc8c5e750e0  bin/windows-x64/artnet-listener.exe
 94ba3b8540137c444cac4b38880d862d9e783ef636ed5ced0a3d3ca873c86bb8  bin/windows-x64/fadecandy-probe.exe
+915e90316e732eb928130191161b25a284e6b6eda3fcc3556bd3b2acb9fbe8ea  bin/windows-x64/pxlblz-fadecandy-0.1.1.exe
 b3d6bcfe071433a3d9eaf16ab45b42b404b6d791eb801c7c89ca5557cdb0816e  bin/windows-x64/pxlblz-fadecandy.exe
 e1981fbe7f330edd876f9ed5676b13edb28f0d6abd341264e4cd52c2f996c352  bin/windows-x64/pxlblz-frame-sender.exe
 ae4195faba9bb1e4e0ea88aeeda602cc778900b8ab93d784a08100f14c7b3d55  bin/windows-x64/pxlblz-router.exe
