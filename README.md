@@ -93,3 +93,7 @@ P7  pixels 7134..7645  U146..U149  512 LEDs
 P6 + P7 are two electrical lanes belonging to the same sixth physical panel.
 
 See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for architecture, test history, receiver requirements, and the deferred fine-tuning backlog.
+
+## Fadecandy Windows desktop version
+
+The reproducible **fadecandy-v0.1.1** snapshot includes the desktop starter, dedicated browser profile setup, local login, bridge checks and exact IDE integration source. See [installation and restore](windows-launcher/README.md) and [version notes](docs/versions/fadecandy-v0.1.1.md).

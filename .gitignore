@@ -3,3 +3,15 @@ router/dist/
 router/*.exe
 *.tmp
 *.log
+
+# Installed local runtime and private browser/database state
+fadecandy/bin/
+**/BrowserProfile/
+**/launcher-config.json
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+**/.wrangler/
+**/node_modules/
+**/*.lnk
+**/*.pxout-backup-*
