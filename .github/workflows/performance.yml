@@ -1,0 +1,73 @@
+name: Performance lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Performance profile
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - perf
+          - soak
+          - stress
+      seconds:
+        description: Optional duration override in seconds
+        required: false
+        type: string
+  schedule:
+    - cron: '17 3 * * 0'
+
+jobs:
+  performance:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: router/go.mod
+
+      - name: Install TypeScript
+        run: npm install --global typescript@5.8.3
+
+      - name: Choose profile
+        id: profile
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "name=perf" >> "$GITHUB_OUTPUT"
+            echo "seconds=" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ inputs.profile }}" >> "$GITHUB_OUTPUT"
+            echo "seconds=${{ inputs.seconds }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run performance lab
+        shell: bash
+        run: |
+          EXTRA=()
+          if [ -n "${{ steps.profile.outputs.seconds }}" ]; then
+            EXTRA+=(--seconds "${{ steps.profile.outputs.seconds }}")
+          fi
+          node perf-test/run-performance.mjs --profile "${{ steps.profile.outputs.name }}" --out "perf-results/${{ runner.os }}-${{ steps.profile.outputs.name }}" "${EXTRA[@]}"
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-${{ runner.os }}-${{ steps.profile.outputs.name }}
+          path: perf-results/
+          if-no-files-found: warn
