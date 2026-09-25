@@ -200,3 +200,68 @@ Hard failures currently include:
 Heap growth is reported and currently warns above 32 MB rather than failing.
 After we collect long-run baselines on the target Windows machine, that should
 be tightened into a hard stability threshold.
+
+
+## Load-generator design
+
+Performance profiles use the exact PXLBLZ adapter with a deadline-anchored
+scheduler. The scheduler does not use a drifting `setInterval`: every frame
+deadline remains relative to the original start time.
+
+The performance lab uses `--mode static` for the source frame so the benchmark
+isolates:
+
+```text
+Float64 -> RGB888 conversion
+WebSocket transport
+LatestFrame
+router packetization
+UDP output
+receiver reassembly
+```
+
+The static frame still changes one value each frame so consecutive messages are
+not byte-identical.
+
+The separate normal virtual E2E test keeps the dynamic frame generator for a
+more browser-like functional exercise.
+
+## Adapter microbenchmark
+
+The exact production `externalPixelOutput.ts` is benchmarked with a null
+WebSocket sink before the E2E run.
+
+Reported metrics include:
+
+```text
+ms/frame
+frames/s
+RGB output MB/s
+Float64 input MB/s
+```
+
+This isolates the Float64-to-RGB888 conversion cost from UDP/network timing.
+
+## Baseline versus candidate
+
+Keep the `summary.json` from a known-good run, make one optimization, run the
+same profile again, then compare:
+
+```bat
+node perf-test\compare-results.mjs baseline\summary.json candidate\summary.json
+```
+
+The comparison prints percentage changes for:
+
+- adapter conversion
+- complete output FPS / packets per second
+- Art-Net assembly p99
+- frame interval p99
+- router SendFrame p50 / p95 / p99 / max
+- heap metrics
+- Go microbenchmark ns/op and MB/s
+
+It exits non-zero if a previously passing correctness gate becomes failing.
+
+For meaningful performance comparisons use the **same machine, same profile,
+same duration and minimal unrelated workload**.
