@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: |
           EXTRA=()
-          if [ -n "${{ steps.profile.outputs.seconds }}" ]; then
+          if [ -n "${{ steps.profile.outputs.seconds }}" ] && [ "${{ steps.profile.outputs.seconds }}" != "0" ]; then
             EXTRA+=(--seconds "${{ steps.profile.outputs.seconds }}")
           fi
           node perf-test/run-performance.mjs --profile "${{ steps.profile.outputs.name }}" --out "perf-results/${{ runner.os }}-${{ steps.profile.outputs.name }}" "${EXTRA[@]}"
