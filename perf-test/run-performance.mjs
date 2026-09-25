@@ -52,6 +52,7 @@ const routerLogPath = path.join(resultRoot, 'router.log')
 const probeLogPath = path.join(resultRoot, 'probe.log')
 const driverLogPath = path.join(resultRoot, 'driver.log')
 const benchPath = path.join(resultRoot, 'microbench.txt')
+const adapterBenchPath = path.join(resultRoot, 'adapter-microbench.json')
 const samplesPath = path.join(resultRoot, 'router-samples.csv')
 const summaryPath = path.join(resultRoot, 'summary.json')
 const machinePath = path.join(resultRoot, 'machine.json')
@@ -179,6 +180,18 @@ run('tsc', [
   '--lib', 'ES2022,DOM', '--outDir', build,
 ], { shell: process.platform === 'win32' })
 
+console.log('=== Exact PXLBLZ adapter conversion microbenchmark ===')
+const adapterBenchRun = run(process.execPath, [
+  path.join(here, 'adapter-benchmark.mjs'),
+  '--module', path.join(build, 'externalPixelOutput.js'),
+  '--pixels', String(settings.pixels),
+])
+const adapterBenchMatch = /^ADAPTER_BENCHMARK_JSON (.+)$/m.exec(adapterBenchRun.stdout)
+if (!adapterBenchMatch) throw new Error('adapter microbenchmark did not emit JSON')
+const adapterMicrobench = JSON.parse(adapterBenchMatch[1])
+fs.writeFileSync(adapterBenchPath, JSON.stringify(adapterMicrobench, null, 2) + '\n')
+console.log(JSON.stringify(adapterMicrobench, null, 2))
+
 // The shared virtual driver imports ./build/externalPixelOutput.js from its own
 // directory. Copy it into this result-local harness so every run is immutable.
 const driverLocal = path.join(tmp, 'driver.mjs')
@@ -232,6 +245,7 @@ try {
     '--fps', String(settings.inputFps),
     '--seconds', String(settings.seconds + 2),
     '--url', `ws://127.0.0.1:${wsPort}/pixels`,
+    '--mode', 'static',
   ], tmp)
 
   await new Promise((resolve, reject) => {
@@ -303,6 +317,7 @@ const hardChecks = {
   routerSendErrors: finalTx ? Number(finalTx[8]) === 0 : routerSamples.every(s => s.errors === 0),
   sendDuty: percentile(sendAvg, .99) < framePeriodMs * 0.75,
   assemblyP99: probeReport.assembly.p99_ms < Math.min(25, framePeriodMs * 0.90),
+  adapterDuty: adapterMicrobench.msPerFrame < framePeriodMs * 0.75,
 }
 const warnings = []
 const heapGrowthMB = heaps.length ? heaps.at(-1) - heaps[0] : 0
@@ -320,6 +335,7 @@ const summary = {
     framePeriodMs,
   },
   machine,
+  adapterMicrobench,
   microbench,
   adapter: adapterMatch ? {
     pixels: Number(adapterMatch[1]),
@@ -355,6 +371,7 @@ const summary = {
     probeLog: probeLogPath,
     driverLog: driverLogPath,
     microbench: benchPath,
+    adapterMicrobench: adapterBenchPath,
     machine: machinePath,
   },
 }
