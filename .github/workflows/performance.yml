@@ -58,8 +58,17 @@ jobs:
             echo "name=perf" >> "$GITHUB_OUTPUT"
             echo "seconds=" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "name=smoke" >> "$GITHUB_OUTPUT"
-            echo "seconds=" >> "$GITHUB_OUTPUT"
+            MESSAGE="${{ github.event.head_commit.message }}"
+            PROFILE="smoke"
+            SECONDS=""
+            if [[ "$MESSAGE" =~ \[perf=(smoke|perf|soak|stress)\] ]]; then
+              PROFILE="${BASH_REMATCH[1]}"
+            fi
+            if [[ "$MESSAGE" =~ \[seconds=([0-9]+)\] ]]; then
+              SECONDS="${BASH_REMATCH[1]}"
+            fi
+            echo "name=$PROFILE" >> "$GITHUB_OUTPUT"
+            echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           else
             echo "name=${{ inputs.profile }}" >> "$GITHUB_OUTPUT"
             echo "seconds=${{ inputs.seconds }}" >> "$GITHUB_OUTPUT"
