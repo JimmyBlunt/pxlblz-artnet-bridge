@@ -17,7 +17,7 @@ import (
 	"pxlblz-router/internal/wsmini"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 func main() {
 	configPath := flag.String("config", "config/routes.loopback.json", "route configuration JSON")
@@ -136,18 +136,22 @@ func main() {
 			if mode == "ws" {
 				ist := latest.Stats()
 				wst := wsServer.Stats()
-				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send last %6.3f ms max %6.3f ms | errors %d\n",
+				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send avg %6.3f ms last %6.3f ms max %6.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
 					float64(ist.Submitted-lastRX), ist.Replaced-lastReplaced, ist.Invalid-lastInvalid, wst.Active,
 					txFPS, txPPS,
+					avgSendMs,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
+					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
 				lastRX, lastReplaced, lastInvalid = ist.Submitted, ist.Replaced, ist.Invalid
 			} else {
-				fmt.Printf("TX %5.1f fps | %5d pkt/s | frame-send last %7.3f ms max %7.3f ms | errors %d\n",
+				fmt.Printf("TX %5.1f fps | %5d pkt/s | send avg %7.3f ms last %7.3f ms max %7.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
 					txFPS, txPPS,
+					avgSendMs,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
+					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
 			}
 			lastFrames, lastPackets, lastTotalFrameTime = st.Frames, st.Packets, st.TotalFrameTime
@@ -167,8 +171,16 @@ func printFinal(r *router.Router, latest *frameinput.LatestFrame, start time.Tim
 	if sec < 0.001 {
 		sec = 0.001
 	}
-	fmt.Printf("\nFinal TX: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %d send errors\n",
-		st.Frames, st.Packets, float64(st.Frames)/sec, float64(st.Packets)/sec, st.SendErrors)
+	avgSendMs := 0.0
+	if st.Frames > 0 {
+		avgSendMs = float64(st.TotalFrameTime.Microseconds()) / 1000.0 / float64(st.Frames)
+	}
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	fmt.Printf("\nFinal TX: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %.3f avg send ms, %.3f max send ms, %.1f MB heap, %d send errors\n",
+		st.Frames, st.Packets, float64(st.Frames)/sec, float64(st.Packets)/sec,
+		avgSendMs, float64(st.MaxFrameTime.Microseconds())/1000.0,
+		float64(mem.HeapAlloc)/1024.0/1024.0, st.SendErrors)
 	if latest != nil {
 		s := latest.Stats()
 		fmt.Printf("Final RX: %d valid frames, %d replaced before output observation, %d invalid\n", s.Submitted, s.Replaced, s.Invalid)
