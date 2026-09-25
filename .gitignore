@@ -3,3 +3,7 @@ router/dist/
 router/*.exe
 *.tmp
 *.log
+
+# Virtual PXLBLZ integration test output
+pxlblz-integration/virtual-test/build/
+pxlblz-integration/virtual-test/.tmp/
