@@ -15,7 +15,7 @@ fs.mkdirSync(buildDir, { recursive: true })
 fs.mkdirSync(tmpDir, { recursive: true })
 
 function run(command, args, opts = {}) {
-  const r = spawnSync(command, args, { cwd: opts.cwd ?? repoRoot, encoding: 'utf8', stdio: opts.stdio ?? 'pipe' })
+  const r = spawnSync(command, args, { cwd: opts.cwd ?? repoRoot, encoding: 'utf8', stdio: opts.stdio ?? 'pipe', shell: opts.shell ?? false })
   if (r.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed (${r.status})\nSTDOUT:\n${r.stdout ?? ''}\nSTDERR:\n${r.stderr ?? ''}`)
   }
@@ -54,12 +54,11 @@ async function stop(proc) {
 }
 
 console.log('=== Compile exact externalPixelOutput.ts ===')
-const tscCommand = process.platform === 'win32' ? 'tsc.cmd' : 'tsc'
-run(tscCommand, [
+run('tsc', [
   path.join(repoRoot, 'pxlblz-integration', 'src', 'externalPixelOutput.ts'),
   '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler',
   '--lib', 'ES2022,DOM', '--outDir', buildDir,
-])
+], { shell: process.platform === 'win32' })
 
 console.log('=== Adapter unit/self-test ===')
 run(process.execPath, [path.join(here, 'adapter-selftest.mjs')], { stdio: 'inherit' })

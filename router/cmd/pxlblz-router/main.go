@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -161,6 +162,7 @@ func main() {
 	defer statsTicker.Stop()
 	prev := sched.Status()
 	lastTotal := r.Stats()
+	lastSendFrames, lastSendTime := r.SendTotals()
 	var lastRX, lastReplaced, lastInvalid uint64
 
 	for {
@@ -173,21 +175,33 @@ func main() {
 			st := r.Stats()
 			txFPS := float64(st.Frames - lastTotal.Frames)
 			txPPS := st.Packets - lastTotal.Packets
+			sendFrames, sendTime := r.SendTotals()
+			avgSendMs := 0.0
+			if n := sendFrames - lastSendFrames; n > 0 {
+				avgSendMs = float64((sendTime - lastSendTime).Microseconds()) / 1000.0 / float64(n)
+			}
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			heapMB := float64(mem.HeapAlloc) / 1024.0 / 1024.0
 			if mode == "ws" {
 				ist := latest.Stats()
 				wst := wsServer.Stats()
-				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send last %6.3f ms max %6.3f ms | errors %d\n",
+				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send avg %6.3f ms last %6.3f ms max %6.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
 					float64(ist.Submitted-lastRX), ist.Replaced-lastReplaced, ist.Invalid-lastInvalid, wst.Active,
 					txFPS, txPPS,
+					avgSendMs,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
+					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
 				lastRX, lastReplaced, lastInvalid = ist.Submitted, ist.Replaced, ist.Invalid
 			} else {
-				fmt.Printf("TX %5.1f fps | %5d pkt/s | frame-send last %7.3f ms max %7.3f ms | errors %d\n",
+				fmt.Printf("TX %5.1f fps | %5d pkt/s | send avg %7.3f ms last %7.3f ms max %7.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
 					txFPS, txPPS,
+					avgSendMs,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
+					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
 			}
 			cur := sched.Status()
@@ -204,6 +218,7 @@ func main() {
 			}
 			prev = cur
 			lastTotal = st
+			lastSendFrames, lastSendTime = sendFrames, sendTime
 		}
 	}
 }
@@ -311,11 +326,24 @@ func printFinal(r *router.Router, latest *frameinput.LatestFrame, mode string, s
 	if sec < 0.001 {
 		sec = 0.001
 	}
-	fmt.Println()
-	for _, c := range r.Controllers() {
-		st := c.Stats()
-		fmt.Printf("Final TX [%s %s]: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %d send errors\n",
-			c.Name(), c.TargetIP(), st.Frames, st.Packets, float64(st.Frames)/sec, float64(st.Packets)/sec, st.SendErrors)
+	// The aggregate "Final TX:" line is parsed by perf-test/run-performance.mjs.
+	st := r.Stats()
+	avgSendMs := 0.0
+	if frames, total := r.SendTotals(); frames > 0 {
+		avgSendMs = float64(total.Microseconds()) / 1000.0 / float64(frames)
+	}
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	fmt.Printf("\nFinal TX: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %.3f avg send ms, %.3f max send ms, %.1f MB heap, %d send errors\n",
+		st.Frames, st.Packets, float64(st.Frames)/sec, float64(st.Packets)/sec,
+		avgSendMs, float64(st.MaxFrameTime.Microseconds())/1000.0,
+		float64(mem.HeapAlloc)/1024.0/1024.0, st.SendErrors)
+	if len(r.Controllers()) > 1 {
+		for _, c := range r.Controllers() {
+			cs := c.Stats()
+			fmt.Printf("Final TX [%s %s]: %d frames, %d packets, %.2f avg fps, %.2f packets/s, %d send errors\n",
+				c.Name(), c.TargetIP(), cs.Frames, cs.Packets, float64(cs.Frames)/sec, float64(cs.Packets)/sec, cs.SendErrors)
+		}
 	}
 	if mode == "ws" {
 		s := latest.Stats()

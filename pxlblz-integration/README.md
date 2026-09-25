@@ -30,6 +30,16 @@ Output is deliberately opt-in:
 ?pxout=1
 ```
 
+Once enabled, the experimental output flag and optional `pxoutUrl` are kept in
+`sessionStorage`, so Gallery → Studio navigation or an auth redirect in the
+**same browser tab** does not silently disable hardware output. Use:
+
+```text
+?pxout=0
+```
+
+to explicitly disable it again for that tab. Closing the tab clears the state.
+
 Example when PXLBLZ is running on Vite's usual local URL:
 
 ```text

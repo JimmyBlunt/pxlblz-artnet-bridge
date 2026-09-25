@@ -139,8 +139,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	defer func() { s.active.Add(-1); s.mu.Lock(); delete(s.conns, conn); s.mu.Unlock(); _ = conn.Close() }()
 
 	br := rw.Reader
+	var payloadScratch []byte
 	for {
-		opcode, payload, err := readFrame(br, true, s.maxPayload)
+		opcode, payload, nextScratch, err := readFrameInto(br, true, s.maxPayload, payloadScratch)
+		payloadScratch = nextScratch
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.protocolErr.Add(1)
@@ -178,53 +180,71 @@ func headerHasToken(v, token string) bool {
 }
 
 func readFrame(r io.Reader, requireMask bool, maxPayload int) (byte, []byte, error) {
+	opcode, payload, _, err := readFrameInto(r, requireMask, maxPayload, nil)
+	return opcode, payload, err
+}
+
+// readFrameInto decodes one complete websocket frame while reusing scratch as
+// payload storage when possible. payload aliases the returned scratch buffer
+// and is valid until the next readFrameInto call that reuses it.
+//
+// Server.handle invokes onBinary synchronously; the router's callback copies the
+// frame into LatestFrame before returning, so one receive buffer can safely be
+// reused for the lifetime of a connection instead of allocating per video frame.
+func readFrameInto(r io.Reader, requireMask bool, maxPayload int, scratch []byte) (byte, []byte, []byte, error) {
 	var h [2]byte
 	if _, err := io.ReadFull(r, h[:]); err != nil {
-		return 0, nil, err
+		return 0, nil, scratch, err
 	}
 	fin := h[0]&0x80 != 0
 	if !fin || h[0]&0x70 != 0 {
-		return 0, nil, fmt.Errorf("fragmented/RSV websocket frames unsupported")
+		return 0, nil, scratch, fmt.Errorf("fragmented/RSV websocket frames unsupported")
 	}
 	opcode := h[0] & 0x0f
 	masked := h[1]&0x80 != 0
 	if requireMask && !masked {
-		return 0, nil, fmt.Errorf("client frame is not masked")
+		return 0, nil, scratch, fmt.Errorf("client frame is not masked")
 	}
 	n64 := uint64(h[1] & 0x7f)
 	switch n64 {
 	case 126:
 		var x [2]byte
 		if _, err := io.ReadFull(r, x[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, scratch, err
 		}
 		n64 = uint64(binary.BigEndian.Uint16(x[:]))
 	case 127:
 		var x [8]byte
 		if _, err := io.ReadFull(r, x[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, scratch, err
 		}
 		n64 = binary.BigEndian.Uint64(x[:])
 	}
 	if n64 > uint64(maxPayload) {
-		return 0, nil, fmt.Errorf("websocket payload %d exceeds max %d", n64, maxPayload)
+		return 0, nil, scratch, fmt.Errorf("websocket payload %d exceeds max %d", n64, maxPayload)
 	}
 	var mask [4]byte
 	if masked {
 		if _, err := io.ReadFull(r, mask[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, scratch, err
 		}
 	}
-	payload := make([]byte, int(n64))
+	n := int(n64)
+	if cap(scratch) < n {
+		scratch = make([]byte, n)
+	} else {
+		scratch = scratch[:n]
+	}
+	payload := scratch[:n]
 	if _, err := io.ReadFull(r, payload); err != nil {
-		return 0, nil, err
+		return 0, nil, scratch, err
 	}
 	if masked {
 		for i := range payload {
 			payload[i] ^= mask[i&3]
 		}
 	}
-	return opcode, payload, nil
+	return opcode, payload, scratch, nil
 }
 
 func writeClose(w io.Writer, code uint16, text string) error {

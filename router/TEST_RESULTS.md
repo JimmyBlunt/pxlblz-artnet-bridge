@@ -177,3 +177,23 @@ Unit tests (`go test -race ./...`) additionally pin:
 
 PASS (software). Hardware re-verification on BACK_PANEL_249 with v0.3 is still required — see
 `docs/V0.3_MULTI_CONTROLLER.md`, test V1.
+
+## L2 — v0.3.0-dev after merging `main` (v0.2.1 performance telemetry), 2026-09-26
+
+Windows 11 x64, Go 1.23.12, EXEs built exactly like `.github/workflows/build-windows.yml`.
+Send-time telemetry (`TotalFrameTime`) is now counted per controller; the aggregate
+`Final TX:` and `RX ... | send avg ... | heap ...` lines keep the `main` format.
+
+```text
+go vet ./...                        clean
+go test ./...                       all packages ok (new: TestSendTotalsSumControllers)
+BenchmarkSendFrameDryRunBackPanel8186   0 allocs/op
+three-controller loopback, 60 fps sender for 7 s:
+  LOOP_A 60/60 fps, LOOP_B 30/30 fps, LOOP_C 30/30 fps, 1590 pkt/s, 0 send errors, listener invalid 0
+  after 1000 ms without input: all controllers STALE/blackout
+  /status JSON served on 127.0.0.1:9981
+perf-test/run-performance.mjs regexes against router stdout: 11 RX lines + Final TX matched
+```
+
+Not run locally: `run-virtual-e2e.mjs` and `run-performance.mjs` (need `tsc`).
+PASS (software). Hardware V1–V4 still open.

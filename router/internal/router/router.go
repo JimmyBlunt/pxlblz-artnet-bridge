@@ -22,27 +22,29 @@ type PlannedRoute struct {
 
 // Stats are cumulative counters. They are safe to read from any goroutine.
 type Stats struct {
-	Frames        uint64
-	Packets       uint64
-	Bytes         uint64
-	SendErrors    uint64
-	LastFrameTime time.Duration
-	MaxFrameTime  time.Duration
+	Frames         uint64
+	Packets        uint64
+	Bytes          uint64
+	SendErrors     uint64
+	LastFrameTime  time.Duration
+	MaxFrameTime   time.Duration
+	TotalFrameTime time.Duration
 }
 
 type statCounters struct {
 	frames, packets, bytes, sendErrors atomic.Uint64
-	lastNS, maxNS                      atomic.Int64
+	lastNS, maxNS, totalNS             atomic.Int64
 }
 
 func (s *statCounters) snapshot() Stats {
 	return Stats{
-		Frames:        s.frames.Load(),
-		Packets:       s.packets.Load(),
-		Bytes:         s.bytes.Load(),
-		SendErrors:    s.sendErrors.Load(),
-		LastFrameTime: time.Duration(s.lastNS.Load()),
-		MaxFrameTime:  time.Duration(s.maxNS.Load()),
+		Frames:         s.frames.Load(),
+		Packets:        s.packets.Load(),
+		Bytes:          s.bytes.Load(),
+		SendErrors:     s.sendErrors.Load(),
+		LastFrameTime:  time.Duration(s.lastNS.Load()),
+		MaxFrameTime:   time.Duration(s.maxNS.Load()),
+		TotalFrameTime: time.Duration(s.totalNS.Load()),
 	}
 }
 
@@ -144,7 +146,8 @@ func (r *Router) Close() error {
 func (r *Router) Controllers() []*Controller { return r.controllers }
 
 // Stats aggregates all controllers. Frames, LastFrameTime and MaxFrameTime
-// are the maximum over controllers; packets, bytes and errors are summed.
+// are the maximum over controllers; packets, bytes, errors and TotalFrameTime
+// are summed. Use SendTotals for an average send time per controller frame.
 func (r *Router) Stats() Stats {
 	var out Stats
 	for _, c := range r.controllers {
@@ -155,8 +158,20 @@ func (r *Router) Stats() Stats {
 		out.SendErrors += s.SendErrors
 		out.LastFrameTime = max(out.LastFrameTime, s.LastFrameTime)
 		out.MaxFrameTime = max(out.MaxFrameTime, s.MaxFrameTime)
+		out.TotalFrameTime += s.TotalFrameTime
 	}
 	return out
+}
+
+// SendTotals returns the number of controller frames sent and the time spent
+// sending them, summed over all controllers.
+func (r *Router) SendTotals() (frames uint64, total time.Duration) {
+	for _, c := range r.controllers {
+		s := c.Stats()
+		frames += s.Frames
+		total += s.TotalFrameTime
+	}
+	return frames, total
 }
 
 func (r *Router) RouteSummary() []string {
@@ -254,6 +269,7 @@ func (r *Router) sendController(c *Controller, frame []byte) error {
 	c.stats.bytes.Add(bytes)
 	c.stats.sendErrors.Add(errs)
 	c.stats.lastNS.Store(int64(dt))
+	c.stats.totalNS.Add(int64(dt))
 	if int64(dt) > c.stats.maxNS.Load() {
 		c.stats.maxNS.Store(int64(dt))
 	}

@@ -188,3 +188,39 @@ func TestSequenceWrapSkipsZero(t *testing.T) {
 		t.Fatalf("after 255 frames seq=%d, want wrap to 1", c.seq)
 	}
 }
+
+// Send-time telemetry from the performance lab must be accounted per
+// controller and summed, so the average stays per controller frame.
+func TestSendTotalsSumControllers(t *testing.T) {
+	cfg := cfgpkg.Config{
+		Version: 2,
+		Input:   cfgpkg.InputConfig{PixelCount: 20, FPSTarget: 30},
+		ArtNet:  cfgpkg.ArtNet{UDPPort: 6454},
+		Routes: []cfgpkg.Route{
+			{Name: "a", Enabled: true, TargetIP: "10.0.0.1", PixelStart: 0, PixelCount: 10, ColorOrder: "RGB"},
+			{Name: "b", Enabled: true, TargetIP: "10.0.0.2", PixelStart: 10, PixelCount: 10, ColorOrder: "GRB"},
+		},
+	}
+	r, err := New(cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := r.Controllers()[0], r.Controllers()[1]
+	frame := make([]byte, 60)
+	for i := 0; i < 3; i++ {
+		_ = r.SendController(a, frame)
+	}
+	_ = r.SendController(b, frame)
+
+	frames, total := r.SendTotals()
+	if frames != 4 {
+		t.Fatalf("SendTotals frames %d, want 4", frames)
+	}
+	want := a.Stats().TotalFrameTime + b.Stats().TotalFrameTime
+	if total != want || r.Stats().TotalFrameTime != want {
+		t.Fatalf("total %v / aggregate %v, want %v", total, r.Stats().TotalFrameTime, want)
+	}
+	if as := a.Stats(); as.TotalFrameTime < as.MaxFrameTime {
+		t.Fatalf("controller total %v below max %v", as.TotalFrameTime, as.MaxFrameTime)
+	}
+}
