@@ -27,6 +27,8 @@ function row(name, base, next, lowerIsBetter = false) {
 }
 
 const rows = [
+  row('adapter.sendRatio', baseline.adapter?.sendRatio, candidate.adapter?.sendRatio),
+  row('adapter.skippedBackpressure', baseline.adapter?.skippedBackpressure, candidate.adapter?.skippedBackpressure, true),
   row('adapter.msPerFrame', baseline.adapterMicrobench?.msPerFrame, candidate.adapterMicrobench?.msPerFrame, true),
   row('adapter.framesPerSecond', baseline.adapterMicrobench?.framesPerSecond, candidate.adapterMicrobench?.framesPerSecond),
   row('adapter.rgbOutputMBps', baseline.adapterMicrobench?.rgbOutputMBps, candidate.adapterMicrobench?.rgbOutputMBps),
