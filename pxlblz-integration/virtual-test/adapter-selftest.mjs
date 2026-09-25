@@ -31,9 +31,17 @@ class FakeWebSocket {
   }
 }
 
+class MemoryStorage {
+  constructor() { this.values = new Map() }
+  getItem(key) { return this.values.has(key) ? this.values.get(key) : null }
+  setItem(key, value) { this.values.set(key, String(value)) }
+  removeItem(key) { this.values.delete(key) }
+}
+
 globalThis.WebSocket = FakeWebSocket
 globalThis.window = {
   location: { search: '?pxout=1' },
+  sessionStorage: new MemoryStorage(),
   setTimeout: globalThis.setTimeout.bind(globalThis),
   clearTimeout: globalThis.clearTimeout.bind(globalThis),
 }
@@ -62,6 +70,12 @@ out.close()
 assert.equal(ws.readyState, FakeWebSocket.CLOSED)
 
 window.location.search = ''
+const persisted = createExternalPixelOutput(2)
+assert.equal(persisted.enabled, true)
+await new Promise(resolve => setTimeout(resolve, 0))
+persisted.close()
+
+window.location.search = '?pxout=0'
 const before = FakeWebSocket.instances.length
 const disabled = createExternalPixelOutput(2)
 assert.equal(disabled.enabled, false)
@@ -69,4 +83,7 @@ disabled.sendPacked(new Float64Array(6))
 disabled.close()
 assert.equal(FakeWebSocket.instances.length, before)
 
-console.log('ADAPTER_SELFTEST_PASS conversion=ok wrong-size=drop backpressure=drop disabled=noop')
+window.location.search = ''
+assert.equal(createExternalPixelOutput(2).enabled, false)
+
+console.log('ADAPTER_SELFTEST_PASS conversion=ok wrong-size=drop backpressure=drop session-persist=ok explicit-off=ok')
