@@ -7,3 +7,7 @@ router/*.exe
 # Virtual PXLBLZ integration test output
 pxlblz-integration/virtual-test/build/
 pxlblz-integration/virtual-test/.tmp/
+
+# Performance lab output
+perf-test/results/
+perf-results/
