@@ -175,8 +175,9 @@ func main() {
 				deadline = started.Add(*duration)
 				lastPrint = started
 				packets = uint64(len(expected))
-				for u := range expected {
+				for u, payloadLen := range expected {
 					perUniverse[u] = 1
+					bytes += uint64(artnet.HeaderSize + payloadLen)
 				}
 				complete = 1
 				assemblySamples = append(assemblySamples, now.Sub(current.first))
