@@ -23,17 +23,50 @@ export interface ExternalPixelOutput {
 
 const DEFAULT_URL = 'ws://127.0.0.1:9980/pixels'
 const RECONNECT_MS = 500
+const SESSION_ENABLED_KEY = 'pxlblz:pxout:enabled'
+const SESSION_URL_KEY = 'pxlblz:pxout:url'
+
+function storage(): Storage | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.sessionStorage ?? null
+  } catch {
+    return null
+  }
+}
 
 function queryEnabled(): boolean {
   if (typeof window === 'undefined') return false
-  const value = new URLSearchParams(window.location.search).get('pxout')
-  return value === '1' || value === 'true' || value === 'on'
+  const value = new URLSearchParams(window.location.search).get('pxout')?.trim().toLowerCase()
+  const store = storage()
+  if (value === '1' || value === 'true' || value === 'on') {
+    try { store?.setItem(SESSION_ENABLED_KEY, '1') } catch { /* storage is optional */ }
+    return true
+  }
+  if (value === '0' || value === 'false' || value === 'off') {
+    try { store?.removeItem(SESSION_ENABLED_KEY) } catch { /* storage is optional */ }
+    return false
+  }
+  try {
+    return store?.getItem(SESSION_ENABLED_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 function queryUrl(): string {
   if (typeof window === 'undefined') return DEFAULT_URL
-  const raw = new URLSearchParams(window.location.search).get('pxoutUrl')
-  return raw?.trim() || DEFAULT_URL
+  const store = storage()
+  const raw = new URLSearchParams(window.location.search).get('pxoutUrl')?.trim()
+  if (raw) {
+    try { store?.setItem(SESSION_URL_KEY, raw) } catch { /* storage is optional */ }
+    return raw
+  }
+  try {
+    return store?.getItem(SESSION_URL_KEY)?.trim() || DEFAULT_URL
+  } catch {
+    return DEFAULT_URL
+  }
 }
 
 function clampByte(v: number): number {
