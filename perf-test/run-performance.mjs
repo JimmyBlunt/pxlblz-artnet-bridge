@@ -6,7 +6,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(here, '..', '..')
+const repoRoot = path.resolve(here, '..')
 const routerRoot = path.join(repoRoot, 'router')
 const adapterSource = path.join(repoRoot, 'pxlblz-integration', 'src', 'externalPixelOutput.ts')
 const driverSource = path.join(repoRoot, 'pxlblz-integration', 'virtual-test', 'virtual-pxlblz-driver.mjs')
