@@ -23,6 +23,12 @@ if (mode !== 'dynamic' && mode !== 'static') throw new Error('--mode must be dyn
 // standards-compatible WebSocket and performance objects.
 globalThis.window = {
   location: { search: `?pxout=1&pxoutUrl=${encodeURIComponent(url)}` },
+  sessionStorage: {
+    values: new Map(),
+    getItem(key) { return this.values.has(key) ? this.values.get(key) : null },
+    setItem(key, value) { this.values.set(key, String(value)) },
+    removeItem(key) { this.values.delete(key) },
+  },
   setTimeout: globalThis.setTimeout.bind(globalThis),
   clearTimeout: globalThis.clearTimeout.bind(globalThis),
 }
@@ -79,6 +85,10 @@ while (produced < totalFrames) {
 }
 
 await new Promise(resolve => setTimeout(resolve, 150))
+const stats = output.stats()
 output.close()
 const elapsed = (performance.now() - started) / 1000
-console.log(`VIRTUAL_PXLBLZ_DONE pixels=${pixels} produced=${produced} elapsed=${elapsed.toFixed(3)} avg_fps=${(produced / elapsed).toFixed(2)} mode=${mode}`)
+console.log(
+  `VIRTUAL_PXLBLZ_DONE pixels=${pixels} produced=${produced} elapsed=${elapsed.toFixed(3)} avg_fps=${(produced / elapsed).toFixed(2)} mode=${mode}`
+  + ` sent=${stats.sent} skipped=${stats.skippedBackpressure} not_connected=${stats.notConnected} wrong_size=${stats.wrongSize} connect_attempts=${stats.connectAttempts}`
+)
