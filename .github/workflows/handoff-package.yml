@@ -1,0 +1,36 @@
+name: Build handoff package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record snapshot metadata
+        shell: bash
+        run: |
+          printf "repository=JimmyBlunt/pxlblz-artnet-bridge\ncommit=%s\nbuilt_utc=%s\n" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > SNAPSHOT_INFO.txt
+          git add -f SNAPSHOT_INFO.txt
+          git -c user.name=handoff -c user.email=handoff@local commit -m "temporary handoff metadata" >/dev/null
+
+      - name: Create exact repository ZIP
+        shell: bash
+        run: |
+          git archive --format=zip --prefix=pxlblz-artnet-bridge/ -o pxlblz-artnet-bridge-handoff.zip HEAD
+
+      - name: Upload handoff artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pxlblz-artnet-bridge-handoff
+          path: pxlblz-artnet-bridge-handoff.zip
+          if-no-files-found: error
+          compression-level: 0
