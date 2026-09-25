@@ -1,0 +1,44 @@
+name: Virtual PXLBLZ integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'router/**'
+      - 'pxlblz-integration/**'
+      - '.github/workflows/virtual-integration.yml'
+  pull_request:
+    paths:
+      - 'router/**'
+      - 'pxlblz-integration/**'
+      - '.github/workflows/virtual-integration.yml'
+  workflow_dispatch:
+
+jobs:
+  virtual-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Set up Go 1.23
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: router/go.mod
+
+      - name: Install TypeScript compiler
+        run: npm install --global typescript@5.8.3
+
+      - name: Run exact-adapter virtual E2E
+        run: node pxlblz-integration/virtual-test/run-virtual-e2e.mjs
