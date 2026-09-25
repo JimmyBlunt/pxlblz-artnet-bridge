@@ -54,7 +54,8 @@ async function stop(proc) {
 }
 
 console.log('=== Compile exact externalPixelOutput.ts ===')
-run('tsc', [
+const tscCommand = process.platform === 'win32' ? 'tsc.cmd' : 'tsc'
+run(tscCommand, [
   path.join(repoRoot, 'pxlblz-integration', 'src', 'externalPixelOutput.ts'),
   '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler',
   '--lib', 'ES2022,DOM', '--outDir', buildDir,
