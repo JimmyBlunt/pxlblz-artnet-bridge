@@ -202,9 +202,9 @@ func main() {
 			lastPrint = now
 		}
 	}
-	if synced && current != nil && len(current.seen) > 0 && len(current.seen) != len(expected) {
-		incomplete++
-	}
+	// Do not classify the terminal candidate as incomplete merely because the
+	// measurement window ended in the middle of an otherwise healthy packet burst.
+	// IncompleteFrames counts only candidates abandoned by a newer sequence.
 	if !synced {
 		fatal(fmt.Errorf("no complete frame observed"))
 	}
