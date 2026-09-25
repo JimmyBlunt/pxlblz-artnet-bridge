@@ -89,37 +89,55 @@ func main() {
 	assemblySamples := make([]time.Duration, 0, 4096)
 	intervalSamples := make([]time.Duration, 0, 4096)
 
-	started := time.Now()
-	deadline := started.Add(*duration)
-	lastPrint := started
+	var started time.Time
+	var deadline time.Time
+	syncDeadline := time.Now().Add(10 * time.Second)
+	var lastPrint time.Time
+	synced := false
 
-	for time.Now().Before(deadline) {
+	for deadline.IsZero() || time.Now().Before(deadline) {
 		_ = conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if !synced && time.Now().After(syncDeadline) {
+					fatal(fmt.Errorf("timed out waiting for first complete frame"))
+				}
 				continue
 			}
 			fatal(err)
 		}
 		now := time.Now()
-		packets++
-		bytes += uint64(n)
 
 		p, err := artnet.ParseDmx(buf[:n])
 		if err != nil {
-			invalid++
+			if synced {
+				packets++
+				bytes += uint64(n)
+				invalid++
+			}
 			continue
+		}
+
+		if synced {
+			packets++
+			bytes += uint64(n)
 		}
 
 		wantLen, ok := expected[p.Universe]
 		if !ok {
-			unexpected++
+			if synced {
+				unexpected++
+			}
 			continue
 		}
-		perUniverse[p.Universe]++
+		if synced {
+			perUniverse[p.Universe]++
+		}
 		if len(p.Data) != wantLen {
-			payloadMismatch++
+			if synced {
+				payloadMismatch++
+			}
 			continue
 		}
 
@@ -128,31 +146,46 @@ func main() {
 				lateSameSeq++
 				continue
 			}
-			if haveLastCompleted && p.Sequence != nextSeq(lastCompletedSeq) {
+			if synced && haveLastCompleted && p.Sequence != nextSeq(lastCompletedSeq) {
 				seqGap++
 			}
 			current = &candidate{seq: p.Sequence, first: now, seen: make(map[uint16]bool, len(expected))}
 		} else if p.Sequence != current.seq {
-			if len(current.seen) != len(expected) {
+			if synced && len(current.seen) != len(expected) {
 				incomplete++
 			}
-			if haveLastCompleted && p.Sequence != nextSeq(lastCompletedSeq) {
+			if synced && haveLastCompleted && p.Sequence != nextSeq(lastCompletedSeq) {
 				seqGap++
 			}
 			current = &candidate{seq: p.Sequence, first: now, seen: make(map[uint16]bool, len(expected))}
 		}
 
 		if current.seen[p.Universe] {
-			duplicate++
+			if synced {
+				duplicate++
+			}
 			continue
 		}
 		current.seen[p.Universe] = true
 
 		if len(current.seen) == len(expected) {
-			complete++
-			assemblySamples = append(assemblySamples, now.Sub(current.first))
-			if !lastCompleteAt.IsZero() {
-				intervalSamples = append(intervalSamples, now.Sub(lastCompleteAt))
+			if !synced {
+				synced = true
+				started = now
+				deadline = started.Add(*duration)
+				lastPrint = started
+				packets = uint64(len(expected))
+				for u := range expected {
+					perUniverse[u] = 1
+				}
+				complete = 1
+				assemblySamples = append(assemblySamples, now.Sub(current.first))
+			} else {
+				complete++
+				assemblySamples = append(assemblySamples, now.Sub(current.first))
+				if !lastCompleteAt.IsZero() {
+					intervalSamples = append(intervalSamples, now.Sub(lastCompleteAt))
+				}
 			}
 			lastCompleteAt = now
 			lastCompletedSeq = current.seq
@@ -160,7 +193,7 @@ func main() {
 			current = nil
 		}
 
-		if !*quiet && now.Sub(lastPrint) >= time.Second {
+		if synced && !*quiet && now.Sub(lastPrint) >= time.Second {
 			elapsed := now.Sub(started).Seconds()
 			fmt.Printf("PROBE complete=%d fps=%.2f packets=%d pps=%.0f invalid=%d unexpected=%d payload=%d incomplete=%d gaps=%d dup=%d\n",
 				complete, float64(complete)/elapsed, packets, float64(packets)/elapsed,
@@ -168,8 +201,11 @@ func main() {
 			lastPrint = now
 		}
 	}
-	if current != nil && len(current.seen) > 0 && len(current.seen) != len(expected) {
+	if synced && current != nil && len(current.seen) > 0 && len(current.seen) != len(expected) {
 		incomplete++
+	}
+	if !synced {
+		fatal(fmt.Errorf("no complete frame observed"))
 	}
 
 	elapsed := time.Since(started).Seconds()
