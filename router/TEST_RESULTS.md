@@ -149,3 +149,31 @@ ALL_VIRTUAL_TESTS_PASS
 ```
 
 The test environment lives under `pxlblz-integration/virtual-test/`.
+
+---
+
+## L1 — v0.3.0-dev three-controller loopback (branch `feature/v0.3-multi-controller`, 2026-09-26)
+
+Not a hardware test. Linux build of the same Go source, `config/routes.multi-loopback.json`
+(three controllers on 127.0.0.1 / .2 / .3 with the real .244 / .251 / .253 universe layout),
+external WebSocket sender at 60 FPS for 4 s, then input stopped.
+
+```text
+LOOP_A_60FPS  TX 60.0/60 fps   540 pkt/s   9 universes  GRB
+LOOP_B_30FPS  TX 30.0/30 fps   180 pkt/s   6 universes  BGR
+LOOP_C_30FPS  TX 30.0/30 fps   870 pkt/s  29 universes  RGB (= BACK_PANEL layout)
+total         1590 pkt/s, listener invalid 0, send errors 0
+RX 60 fps, replaced 0, invalid 0
+after 1000 ms without input: all controllers STALE/blackout, still transmitting black
+```
+
+Unit tests (`go test -race ./...`) additionally pin:
+
+- BACK_PANEL frame unchanged: 29 universes, no U138, tails 100/174/90/390/36/300/6, one common sequence;
+- independent per-controller sequence numbers; wrap 255 → 1 (never 0);
+- no transmission before the first valid input frame;
+- stale handling `hold` / `blackout` / `stop` and recovery when input resumes;
+- `panel-walk` walks routes in config order and hands over P6 → P7.
+
+PASS (software). Hardware re-verification on BACK_PANEL_249 with v0.3 is still required — see
+`docs/V0.3_MULTI_CONTROLLER.md`, test V1.

@@ -86,3 +86,30 @@ func (l *LatestFrame) Stats() Stats {
 		LastAt:    t,
 	}
 }
+
+// Snapshot copies the newest frame into dst for one of several independent
+// consumers (one per controller). It does not block the producer beyond a
+// memcpy. lastGen is the generation this consumer saw previously; fresh is
+// true when a newer frame is available. Frames that were replaced before ANY
+// consumer observed them are counted in Stats().Replaced.
+func (l *LatestFrame) Snapshot(dst []byte, lastGen uint64) (have bool, fresh bool, generation uint64, at time.Time, err error) {
+	if len(dst) != len(l.buf) {
+		return false, false, 0, time.Time{}, fmt.Errorf("destination length %d, expected %d", len(dst), len(l.buf))
+	}
+	l.mu.Lock()
+	if !l.have {
+		l.mu.Unlock()
+		return false, false, 0, time.Time{}, nil
+	}
+	generation = l.gen
+	fresh = generation != lastGen
+	if fresh {
+		copy(dst, l.buf)
+	}
+	l.consumed = l.gen
+	l.mu.Unlock()
+	if n := l.lastUnix.Load(); n != 0 {
+		at = time.Unix(0, n)
+	}
+	return true, fresh, generation, at, nil
+}
