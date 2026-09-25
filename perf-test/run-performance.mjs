@@ -112,6 +112,20 @@ function expectedUniverseCount(cfg) {
   return cfg.routes.filter(r => r.enabled).reduce((sum, r) => sum + Math.ceil(r.pixel_count / 170), 0)
 }
 
+function parseBenchmarks(text) {
+  const result = {}
+  const line = /^(Benchmark\S+?)(?:-\d+)?\s+\d+\s+([\d.]+)\s+ns\/op\s+([\d.]+)\s+MB\/s\s+(\d+)\s+B\/op\s+(\d+)\s+allocs\/op$/gm
+  for (const m of text.matchAll(line)) {
+    result[m[1]] = {
+      nsPerOp: Number(m[2]),
+      mbPerSec: Number(m[3]),
+      bytesPerOp: Number(m[4]),
+      allocsPerOp: Number(m[5]),
+    }
+  }
+  return result
+}
+
 function createConfig() {
   if (settings.config === 'backpanel') {
     const source = JSON.parse(fs.readFileSync(path.join(routerRoot, 'config', 'routes.backpanel-all.json'), 'utf8'))
@@ -179,6 +193,7 @@ const bench = run('go', [
 ], { cwd: routerRoot })
 fs.writeFileSync(benchPath, bench.stdout + bench.stderr)
 process.stdout.write(bench.stdout)
+const microbench = parseBenchmarks(bench.stdout)
 
 const routerBin = path.join(tmp, process.platform === 'win32' ? 'pxlblz-router.exe' : 'pxlblz-router')
 const probeBin = path.join(tmp, process.platform === 'win32' ? 'artnet-probe.exe' : 'artnet-probe')
@@ -222,8 +237,14 @@ try {
   await new Promise((resolve, reject) => {
     probe.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`probe exited ${code}`)))
   })
-  await stop(driver)
-  await stop(router)
+  await new Promise((resolve, reject) => {
+    if (driver.child.exitCode !== null) return driver.child.exitCode === 0 ? resolve() : reject(new Error(`driver exited ${driver.child.exitCode}`))
+    driver.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`driver exited ${code}`)))
+  })
+  await new Promise((resolve, reject) => {
+    if (router.child.exitCode !== null) return router.child.exitCode === 0 ? resolve() : reject(new Error(`router exited ${router.child.exitCode}`))
+    router.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`router exited ${code}`)))
+  })
 } finally {
   fs.writeFileSync(routerLogPath, (router?.stdout ?? '') + (router?.stderr ?? ''))
   fs.writeFileSync(probeLogPath, (probe?.stdout ?? '') + (probe?.stderr ?? ''))
@@ -299,6 +320,7 @@ const summary = {
     framePeriodMs,
   },
   machine,
+  microbench,
   adapter: adapterMatch ? {
     pixels: Number(adapterMatch[1]),
     producedFrames: Number(adapterMatch[2]),
