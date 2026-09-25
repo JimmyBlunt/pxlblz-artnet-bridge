@@ -20,12 +20,13 @@ type PlannedRoute struct {
 }
 
 type Stats struct {
-	Frames        uint64
-	Packets       uint64
-	Bytes         uint64
-	SendErrors    uint64
-	LastFrameTime time.Duration
-	MaxFrameTime  time.Duration
+	Frames         uint64
+	Packets        uint64
+	Bytes          uint64
+	SendErrors     uint64
+	LastFrameTime  time.Duration
+	MaxFrameTime   time.Duration
+	TotalFrameTime time.Duration
 }
 
 type Router struct {
@@ -139,6 +140,7 @@ func (r *Router) SendFrame(frame []byte) error {
 	r.stats.Frames++
 	dt := time.Since(started)
 	r.stats.LastFrameTime = dt
+	r.stats.TotalFrameTime += dt
 	if dt > r.stats.MaxFrameTime {
 		r.stats.MaxFrameTime = dt
 	}
