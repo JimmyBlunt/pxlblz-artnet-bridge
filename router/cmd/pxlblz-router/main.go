@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -92,6 +93,7 @@ func main() {
 	var haveExternal bool
 	start := time.Now()
 	lastFrames, lastPackets := uint64(0), uint64(0)
+	var lastTotalFrameTime time.Duration
 	var lastRX, lastReplaced, lastInvalid uint64
 
 	for {
@@ -120,8 +122,17 @@ func main() {
 			}
 		case <-statsTicker.C:
 			st := r.Stats()
-			txFPS := float64(st.Frames - lastFrames)
+			intervalFrames := st.Frames - lastFrames
+			txFPS := float64(intervalFrames)
 			txPPS := st.Packets - lastPackets
+			intervalSend := st.TotalFrameTime - lastTotalFrameTime
+			avgSendMs := 0.0
+			if intervalFrames > 0 {
+				avgSendMs = float64(intervalSend.Microseconds()) / 1000.0 / float64(intervalFrames)
+			}
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			heapMB := float64(mem.HeapAlloc) / 1024.0 / 1024.0
 			if mode == "ws" {
 				ist := latest.Stats()
 				wst := wsServer.Stats()
@@ -139,7 +150,7 @@ func main() {
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
 					st.SendErrors)
 			}
-			lastFrames, lastPackets = st.Frames, st.Packets
+			lastFrames, lastPackets, lastTotalFrameTime = st.Frames, st.Packets, st.TotalFrameTime
 		case <-sig:
 			printFinal(r, latest, start)
 			return
