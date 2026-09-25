@@ -45,10 +45,23 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+
+          # Never attach binaries built from an older source snapshot to a newer
+          # main commit. A newer push has its own workflow run and will rebuild.
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "main advanced while this build was running; skipping stale binary commit."
+            exit 0
+          fi
+
           git add bin/windows-x64
           if git diff --cached --quiet; then
             echo "Binaries unchanged."
             exit 0
           fi
+
           git commit -m "Build Windows x64 binaries [skip ci]"
-          git push
+          if ! git push origin HEAD:main; then
+            echo "main advanced during push; newer workflow run will publish matching binaries."
+            exit 0
+          fi
