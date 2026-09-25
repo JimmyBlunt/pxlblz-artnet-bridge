@@ -1,6 +1,13 @@
 name: Performance lab
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'router/**'
+      - 'pxlblz-integration/**'
+      - 'perf-test/**'
+      - '.github/workflows/performance.yml'
   workflow_dispatch:
     inputs:
       profile:
@@ -49,6 +56,9 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "name=perf" >> "$GITHUB_OUTPUT"
+            echo "seconds=" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "name=smoke" >> "$GITHUB_OUTPUT"
             echo "seconds=" >> "$GITHUB_OUTPUT"
           else
             echo "name=${{ inputs.profile }}" >> "$GITHUB_OUTPUT"
