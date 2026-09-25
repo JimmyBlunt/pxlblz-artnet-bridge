@@ -103,3 +103,49 @@ PXLBLZ render loop
 PASS for direct PXLBLZ-to-router transport and frame-size agreement.
 
 Physical visual correctness of the selected live PXLBLZ pattern is tracked separately from transport acceptance.
+
+## Virtual exact-adapter integration environment
+
+The real `pxlblz-integration/src/externalPixelOutput.ts` was compiled and run
+against the real Go router without physical LED hardware.
+
+Adapter self-test:
+
+```text
+ADAPTER_SELFTEST_PASS
+Float [0,1] -> RGB888 conversion/clamping: PASS
+wrong frame size -> drop: PASS
+browser websocket backpressure -> drop, not queue: PASS
+?pxout absent -> no-op: PASS
+```
+
+Virtual E2E A:
+
+```text
+8000 pixels
+adapter input ~89-91 FPS
+router output 60 FPS
+48 universes U0-U47
+2880 Art-Net packets/s
+listener invalid 0
+router invalid 0
+send errors 0
+VIRTUAL_E2E_A_PASS
+```
+
+Virtual E2E B using the production BACK_PANEL route table:
+
+```text
+8186 pixels / 24558 bytes
+adapter ~60 FPS
+router 30 FPS
+29 universes/frame
+870 packets/s
+--dry-run
+invalid 0
+send errors 0
+VIRTUAL_E2E_B_PASS
+ALL_VIRTUAL_TESTS_PASS
+```
+
+The test environment lives under `pxlblz-integration/virtual-test/`.
