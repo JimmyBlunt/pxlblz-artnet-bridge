@@ -93,3 +93,18 @@ P7  pixels 7134..7645  U146..U149  512 LEDs
 P6 + P7 are two electrical lanes belonging to the same sixth physical panel.
 
 See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for architecture, test history, receiver requirements, and the deferred fine-tuning backlog.
+
+## Virtual end-to-end regression test
+
+The hardware-free regression test uses the **real TypeScript PXLBLZ output adapter**
+and the real Go router:
+
+```bash
+node pxlblz-integration/virtual-test/run-virtual-e2e.mjs
+```
+
+It validates Float-to-RGB888 conversion, websocket backpressure semantics, the
+8000-pixel / 48-universe UDP loopback path, and the production 8186-pixel
+BACK_PANEL routing dry-run. CI runs the same gate on Linux and Windows.
+
+See `pxlblz-integration/virtual-test/README.md`.
