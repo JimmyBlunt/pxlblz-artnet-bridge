@@ -49,6 +49,14 @@ globalThis.window = {
 const out = createExternalPixelOutput(2)
 assert.equal(out.enabled, true)
 assert.equal(out.url, 'ws://127.0.0.1:9980/pixels')
+assert.deepEqual(out.stats(), {
+  sent: 0,
+  skippedBackpressure: 0,
+  notConnected: 0,
+  wrongSize: 0,
+  connectAttempts: 1,
+})
+
 await new Promise(resolve => setTimeout(resolve, 0))
 const ws = FakeWebSocket.instances.at(-1)
 assert.ok(ws)
@@ -57,13 +65,16 @@ assert.equal(ws.binaryType, 'arraybuffer')
 out.sendPacked(new Float64Array([-1, 0, 0.5, 1, 2, Number.NaN]))
 assert.equal(ws.sent.length, 1)
 assert.deepEqual([...ws.sent[0]], [0, 0, 128, 255, 255, 0])
+assert.equal(out.stats().sent, 1)
 
 out.sendPacked(new Float64Array([1, 1, 1]))
 assert.equal(ws.sent.length, 1)
+assert.equal(out.stats().wrongSize, 1)
 
 ws.bufferedAmount = 6
 out.sendPacked(new Float64Array([1, 0, 0, 0, 1, 0]))
 assert.equal(ws.sent.length, 1)
+assert.equal(out.stats().skippedBackpressure, 1)
 ws.bufferedAmount = 0
 
 out.close()
@@ -82,8 +93,15 @@ assert.equal(disabled.enabled, false)
 disabled.sendPacked(new Float64Array(6))
 disabled.close()
 assert.equal(FakeWebSocket.instances.length, before)
+assert.deepEqual(disabled.stats(), {
+  sent: 0,
+  skippedBackpressure: 0,
+  notConnected: 0,
+  wrongSize: 0,
+  connectAttempts: 0,
+})
 
 window.location.search = ''
 assert.equal(createExternalPixelOutput(2).enabled, false)
 
-console.log('ADAPTER_SELFTEST_PASS conversion=ok wrong-size=drop backpressure=drop session-persist=ok explicit-off=ok')
+console.log('ADAPTER_SELFTEST_PASS conversion=ok wrong-size=drop backpressure=drop counters=ok session-persist=ok explicit-off=ok')
