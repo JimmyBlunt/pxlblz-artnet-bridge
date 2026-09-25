@@ -14,10 +14,19 @@
  *   handoff as a second latency guard.
  */
 
+export interface ExternalPixelOutputStats {
+  sent: number
+  skippedBackpressure: number
+  notConnected: number
+  wrongSize: number
+  connectAttempts: number
+}
+
 export interface ExternalPixelOutput {
   readonly enabled: boolean
   readonly url: string
   sendPacked(frame: Float64Array): void
+  stats(): ExternalPixelOutputStats
   close(): void
 }
 
@@ -25,6 +34,16 @@ const DEFAULT_URL = 'ws://127.0.0.1:9980/pixels'
 const RECONNECT_MS = 500
 const SESSION_ENABLED_KEY = 'pxlblz:pxout:enabled'
 const SESSION_URL_KEY = 'pxlblz:pxout:url'
+
+function emptyStats(): ExternalPixelOutputStats {
+  return {
+    sent: 0,
+    skippedBackpressure: 0,
+    notConnected: 0,
+    wrongSize: 0,
+    connectAttempts: 0,
+  }
+}
 
 function storage(): Storage | null {
   if (typeof window === 'undefined') return null
@@ -84,6 +103,7 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
       enabled: false,
       url,
       sendPacked: () => undefined,
+      stats: emptyStats,
       close: () => undefined,
     }
   }
@@ -94,9 +114,24 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
   let reconnectTimer: number | null = null
   let closed = false
   let warnedLength = false
-  let skippedBusy = 0
-  let sent = 0
+
+  let totalSent = 0
+  let totalSkippedBusy = 0
+  let totalNotConnected = 0
+  let totalWrongSize = 0
+  let totalConnectAttempts = 0
+
+  let intervalSent = 0
+  let intervalSkippedBusy = 0
   let lastLog = performance.now()
+
+  const snapshotStats = (): ExternalPixelOutputStats => ({
+    sent: totalSent,
+    skippedBackpressure: totalSkippedBusy,
+    notConnected: totalNotConnected,
+    wrongSize: totalWrongSize,
+    connectAttempts: totalConnectAttempts,
+  })
 
   const scheduleReconnect = () => {
     if (closed || reconnectTimer !== null) return
@@ -110,6 +145,7 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
     if (closed) return
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
 
+    totalConnectAttempts++
     try {
       const next = new WebSocket(url)
       next.binaryType = 'arraybuffer'
@@ -142,6 +178,7 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
 
     sendPacked(frame: Float64Array) {
       if (frame.length !== expectedValues) {
+        totalWrongSize++
         if (!warnedLength) {
           warnedLength = true
           console.warn(`[pxout] frame length ${frame.length} != expected ${expectedValues}; output skipped`)
@@ -151,6 +188,7 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
 
       const socket = ws
       if (!socket || socket.readyState !== WebSocket.OPEN) {
+        totalNotConnected++
         connect()
         return
       }
@@ -158,7 +196,8 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
       // Browser WebSocket is TCP. Do not allow it to become a hidden frame FIFO.
       // One full frame already waiting is enough reason to drop this newer render.
       if (socket.bufferedAmount >= rgb.byteLength) {
-        skippedBusy++
+        totalSkippedBusy++
+        intervalSkippedBusy++
         return
       }
 
@@ -167,18 +206,21 @@ export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutp
       }
 
       socket.send(rgb)
-      sent++
+      totalSent++
+      intervalSent++
 
       const now = performance.now()
       if (now - lastLog >= 5000) {
-        if (skippedBusy > 0) {
-          console.info(`[pxout] sent=${sent} skipped-browser-backpressure=${skippedBusy}`)
+        if (intervalSkippedBusy > 0) {
+          console.info(`[pxout] sent=${intervalSent} skipped-browser-backpressure=${intervalSkippedBusy}`)
         }
-        sent = 0
-        skippedBusy = 0
+        intervalSent = 0
+        intervalSkippedBusy = 0
         lastLog = now
       }
     },
+
+    stats: snapshotStats,
 
     close() {
       closed = true
