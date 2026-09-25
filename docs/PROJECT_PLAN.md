@@ -259,3 +259,35 @@ Constraints:
 - integration initially opt-in and easy to disable;
 - full-resolution preview only should own the external output.
 
+## Virtual regression gate
+
+As of 2026-09-26 the project includes an exact-adapter virtual integration test
+under `pxlblz-integration/virtual-test/`.
+
+It compiles the production `externalPixelOutput.ts` and exercises it over a
+real localhost WebSocket against the real router.
+
+Gate A validates:
+
+```text
+externalPixelOutput.ts
+-> WebSocket
+-> pxlblz-router
+-> UDP Art-Net
+-> artnet-listener
+8000 px / 48 universes / 60 FPS router output
+```
+
+Gate B validates the production BACK_PANEL routing without touching hardware:
+
+```text
+8186 px / 24558 bytes
+60 FPS adapter input
+30 FPS router
+29 universes/frame
+870 packets/s
+--dry-run
+```
+
+Future router or PXLBLZ adapter changes should keep this gate green in addition
+to the Go unit tests. GitHub CI executes it on Linux and Windows.
