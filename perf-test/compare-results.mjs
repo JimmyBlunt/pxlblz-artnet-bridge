@@ -27,6 +27,9 @@ function row(name, base, next, lowerIsBetter = false) {
 }
 
 const rows = [
+  row('adapter.msPerFrame', baseline.adapterMicrobench?.msPerFrame, candidate.adapterMicrobench?.msPerFrame, true),
+  row('adapter.framesPerSecond', baseline.adapterMicrobench?.framesPerSecond, candidate.adapterMicrobench?.framesPerSecond),
+  row('adapter.rgbOutputMBps', baseline.adapterMicrobench?.rgbOutputMBps, candidate.adapterMicrobench?.rgbOutputMBps),
   row('probe.frames_per_second', baseline.probe?.frames_per_second, candidate.probe?.frames_per_second),
   row('probe.packets_per_second', baseline.probe?.packets_per_second, candidate.probe?.packets_per_second),
   row('probe.assembly.p99_ms', baseline.probe?.assembly?.p99_ms, candidate.probe?.assembly?.p99_ms, true),
