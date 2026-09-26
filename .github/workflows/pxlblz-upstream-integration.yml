@@ -107,13 +107,18 @@ jobs:
             $cookie = (Get-Content ".\pxlblz\.pxlblz-local-session.txt" -Raw).Trim()
             if (!$cookie.StartsWith("pxlblz_session=")) { throw "Unexpected session file format" }
 
-            $auth = Invoke-RestMethod -Uri "http://localhost:5174/api/me" -Headers @{ Cookie = $cookie } -TimeoutSec 10
+            # Windows PowerShell 5.1 treats Cookie as a special HTTP header.
+            # Use curl.exe so the test proves the exact Cookie header reaches
+            # the Worker rather than relying on Invoke-RestMethod's header shim.
+            $authJson = (& curl.exe --silent --show-error --fail -H "Cookie: $cookie" "http://localhost:5174/api/me" | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "curl.exe authenticated /api/me request failed" }
+            $auth = $authJson | ConvertFrom-Json
             if ($auth.authenticated -ne $true) {
-              $auth | ConvertTo-Json -Depth 8
+              Write-Host $authJson
               throw "Synthetic local developer session was not authenticated"
             }
             if ($auth.user.id -ne "github:local-dev") {
-              $auth | ConvertTo-Json -Depth 8
+              Write-Host $authJson
               throw "Authenticated local user id mismatch"
             }
 
