@@ -24,15 +24,21 @@ func TestVisualizerEndpoints(t *testing.T) {
 		t.Fatalf("status=%+v", s)
 	}
 
-	frameReq := httptest.NewRequest("GET", "/api/frame", nil)
-	frameRec := httptest.NewRecorder()
-	h.ServeHTTP(frameRec, frameReq)
-	if frameRec.Code != 200 { t.Fatalf("frame code=%d", frameRec.Code) }
-	body, err := io.ReadAll(frameRec.Result().Body)
-	if err != nil { t.Fatal(err) }
-	if len(body) != 4105*3 {
-		t.Fatalf("frame bytes=%d want=%d", len(body), 4105*3)
+	for _, stage := range []string{"display", "published", "candidate"} {
+		frameReq := httptest.NewRequest("GET", "/api/frame?stage="+stage, nil)
+		frameRec := httptest.NewRecorder()
+		h.ServeHTTP(frameRec, frameReq)
+		if frameRec.Code != 200 { t.Fatalf("frame stage %s code=%d", stage, frameRec.Code) }
+		body, err := io.ReadAll(frameRec.Result().Body)
+		if err != nil { t.Fatal(err) }
+		if len(body) != 4105*3 {
+			t.Fatalf("frame stage %s bytes=%d want=%d", stage, len(body), 4105*3)
+		}
 	}
+	badReq := httptest.NewRequest("GET", "/api/frame?stage=bogus", nil)
+	badRec := httptest.NewRecorder()
+	h.ServeHTTP(badRec, badReq)
+	if badRec.Code != 400 { t.Fatalf("invalid stage code=%d want 400", badRec.Code) }
 
 	rootReq := httptest.NewRequest("GET", "/", nil)
 	rootRec := httptest.NewRecorder()
