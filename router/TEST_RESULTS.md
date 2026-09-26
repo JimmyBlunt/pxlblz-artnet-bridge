@@ -194,3 +194,53 @@ As of 2026-09-26:
 
 The remaining acceptance items require the real installation: visual validation
 of WS2812_NODE/PANEL8_251 and the missing exact APA102 routing data.
+
+## TCP dump wire-level verification
+
+A production-route packet capture now verifies what actually leaves the router's
+UDP socket. The test assigns the real controller IPs to Linux loopback aliases,
+runs the exact production `routes.installation-known.json`, captures
+`udp port 6454` with `tcpdump`, and validates the resulting PCAP independently.
+
+Captured result:
+
+```text
+6512 ArtDmx packets captured
+44 packets expected per complete logical frame
+148 complete sequence groups
+destination 10.0.0.244 present
+destination 10.0.0.253 present
+destination 10.0.0.251 present
+all ArtDmx payload lengths even
+BACK_PANEL U138 absent
+unexpected packets 0
+status PASS
+TCPDUMP_ARTNET_PASS
+```
+
+Receiver-sensitive BACK_PANEL tail lengths were confirmed directly from PCAP:
+
+```text
+U121 100 bytes
+U126 174 bytes
+U132  90 bytes
+U137 390 bytes
+U141  36 bytes
+U145 300 bytes
+U149   6 bytes
+```
+
+The capture also uses a deterministic logical RGB test value
+`(100, 200, 50)` and verifies physical color order plus route brightness from
+the actual captured ArtDmx payload bytes:
+
+```text
+10.0.0.244 U0    GRB × 0.70 -> captured 140, 70, 35
+10.0.0.253 U120  RGB × 0.30 -> captured  30, 60, 15
+10.0.0.251 U156  BGR × 0.70 -> captured  35,140, 70
+```
+
+PASS.
+
+The CI workflow is `.github/workflows/tcpdump-wire.yml`. It uploads the raw
+PCAP, decoded tcpdump text, verifier JSON and router log as an artifact.
