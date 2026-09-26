@@ -1,4 +1,4 @@
-3ee17a15542f83deb08a8753062194dc3203077c0a1e967b012a8f6bfbb1fc56  bin/windows-x64/artnet-listener.exe
-f0c88decf0558a5c494cc9aae47f7faa678555752193c4e13c519e3cfafd4452  bin/windows-x64/artnet-probe.exe
-7f837657ef583e8c632418293a0af426a2eb4cd5bcbe067a1bfffb2a0d3394f9  bin/windows-x64/pxlblz-frame-sender.exe
-dcb4edcc29c1e4e39e300f437f1a840648b3cf3deefebc5fa646208850a768cc  bin/windows-x64/pxlblz-router.exe
+3bd8a0de7351536da51e258c0c4d52b298d1678d8f7d8ce5115b0c17ee188b93  bin/windows-x64/artnet-listener.exe
+12c5742ed7e0bba1c7d75bd43fcdec6eb1ad68e2d482843ae14b43e707052081  bin/windows-x64/artnet-probe.exe
+6999dd464b5a9e08befa459cb55862e788aff71754cfae3b4caea1881e161a2c  bin/windows-x64/pxlblz-frame-sender.exe
+d1949d7c94a61269a6387145ab53499e2d82680d1b0d954debf202564a781836  bin/windows-x64/pxlblz-router.exe
