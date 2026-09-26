@@ -177,7 +177,7 @@ try {
     '--target-ip', '10.0.0.253',
     '--listen', '127.0.0.1:6455',
     '--web', '',
-    '--duration', '6s',
+    '--duration', '7s',
     '--summary-json', summaryPath,
   ], routerRoot)
   await waitForText(virtualController, 'Receiver model: Teensy runtime_receiver / artnet_run_policy compatible')
