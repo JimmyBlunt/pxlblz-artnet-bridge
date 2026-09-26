@@ -1,71 +1,116 @@
-# Windows local PXLBLZ Studio workaround
+# Windows local PXLBLZ Studio
 
-PXLBLZ IDE upstream commit `d685125b` has a managed `dev:main` runtime
-coordinator that assumes Unix process-management tools.
+PXLBLZ IDE upstream commit `d685125b` includes a managed `dev:main`
+coordinator that assumes Unix process tools such as `ps -axo` and `lsof`.
+That coordinator is therefore not used for native-Windows project operation.
 
-On native Windows the coordinator calls commands such as:
+The supported project path is now automated and CI-verified.
 
-```text
-ps -axo pid=,pgid=,command=
-lsof -nP -iTCP:<port> -sTCP:LISTEN -t
+## One-command preparation
+
+From the bridge repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\pxlblz-integration\prepare-windows-local-studio.ps1" `
+  -PxlblzPath "..\PXLBLZ-IDE" `
+  -MainPxlblzPath "..\PXLBLZ-IDE-main"
 ```
 
-The Windows `ps.exe` does not support those arguments, so `npm run dev:main`
-can time out waiting for `http://localhost:5174/api/me` even though the core
-Vite/Cloudflare development stack itself works.
+The helper:
 
-For this project, use the normal Vite worker runtime directly on Windows and
-prepare the local D1 manually.
+1. verifies the clean worktree is really on `main`;
+2. creates `.dev.vars` from the upstream example when needed;
+3. generates a long random `SESSION_SECRET` if the placeholder is still present;
+4. writes both worktree `.dev.vars` files as UTF-8 **without BOM**;
+5. applies all local D1 migrations;
+6. provisions the synthetic `github:local-dev` identity;
+7. mints a PXLBLZ developer session;
+8. writes the cookie to `.pxlblz-local-session.txt`;
+9. prints the commands required to start Studio.
 
-## Art-Net worktree
+The UTF-8/no-BOM rule is important on Windows PowerShell 5.1. A BOM on the
+first line can make Cloudflare see a different first binding name while
+PXLBLZ's own text parser still trims it.
 
-The modified worktree is the one containing the experimental
-`externalPixelOutput.ts` integration.
-
-Copy the shared development variables into it, migrate its own local D1, seed
-the synthetic developer identity, then run ordinary Vite:
+## Start the modified PXLBLZ worktree
 
 ```bat
-copy /Y "..\PXLBLZ-IDE-main\.dev.vars" ".dev.vars"
-
-npm run db:migrate:local
-
-npx wrangler d1 execute pxlblz-ide --local --command "INSERT INTO users (id, github_user_id, github_login, display_name, avatar_url, created_at, updated_at) VALUES ('github:local-dev','local-dev','local-dev','Local Dev',NULL,unixepoch(),unixepoch()) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, updated_at=excluded.updated_at;"
-
+cd /d "C:\path\to\PXLBLZ-IDE"
 npm run dev
 ```
 
-The Cloudflare Vite plugin serves the UI, Worker API and local D1 in the same
-process. Its default local URL is:
+Default local URL:
 
 ```text
 http://localhost:5174/PXLBLZ-IDE/
 ```
 
-## Synthetic local session
+## Sign in with the synthetic developer session
 
-Once a clean `main` worktree exists, the session helper can still be used on
-Windows because the developer-session path does not require the Unix process
-coordinator:
+The helper prints a browser-console command of the form:
 
-```bat
-npm run dev:session -- --developer
+```js
+document.cookie = "pxlblz_session=<TOKEN>; path=/; SameSite=Lax"
 ```
 
-It prints:
+Run it in DevTools on the localhost PXLBLZ tab, then verify:
+
+```js
+fetch('/api/me').then(r => r.json()).then(console.log)
+```
+
+Expected:
 
 ```text
-pxlblz_session=<token>
+authenticated: true
+user.id: github:local-dev
 ```
 
-Set that cookie for localhost, reload, and open:
+Open Studio with output enabled:
 
 ```text
 http://localhost:5174/PXLBLZ-IDE/studio?pxout=1
 ```
 
-This keeps OAuth credentials unnecessary for local Art-Net testing.
+The output flag is retained in tab-local `sessionStorage`, so SPA navigation
+and auth redirects in that tab do not silently disable it. Use `?pxout=0` to
+turn it off again.
 
-Do not run `npm audit fix --force` in the upstream checkout. The project pins
-specific alpha/dev dependencies and forced audit remediation can change the
-tested dependency graph.
+## Verified Windows regression gate
+
+GitHub Actions now verifies the complete path on `windows-latest` against the
+exact pinned PXLBLZ upstream commit:
+
+```text
+checkout pinned upstream
+→ npm ci
+→ apply integration installer
+→ npm run build
+→ git diff --check
+→ prepare local D1 + local-dev identity
+→ mint session
+→ start ordinary npm run dev
+→ GET /api/me signed out = false
+→ GET /api/me with exact Cookie header = true
+→ user.id = github:local-dev
+```
+
+This gate passed on 2026-09-26.
+
+## OAuth
+
+Real local GitHub or Google OAuth is not required for this Art-Net development
+workflow. It can still be configured separately with local OAuth applications
+if desired later.
+
+## Dependency warning
+
+Do **not** run:
+
+```text
+npm audit fix --force
+```
+
+against the pinned upstream checkout. It changes the tested dependency graph.
+If dependencies are damaged, restore `package.json` and `package-lock.json`,
+remove `node_modules`, and run `npm ci`.
