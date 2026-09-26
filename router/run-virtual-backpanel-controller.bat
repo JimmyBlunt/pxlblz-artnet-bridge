@@ -16,7 +16,7 @@ echo Profile:     7 outputs / 4105 LEDs / 29 universes
 echo Protocol:    Teensy runtime_receiver + run-policy emulator
 echo.
 start "" "http://127.0.0.1:9982/"
-"%VC%" --config config\routes.backpanel-virtual.json --target-ip 127.0.0.1 --listen 127.0.0.1:6454 --web 127.0.0.1:9982
+"%VC%" --config config\routes.backpanel-all.json --target-ip 10.0.0.253 --listen 127.0.0.1:6454 --web 127.0.0.1:9982
 exit /b %errorlevel%
 
 :missing
