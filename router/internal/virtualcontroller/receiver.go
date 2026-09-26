@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"pxlblz-router/internal/artnet"
 	cfgpkg "pxlblz-router/internal/config"
 )
 
@@ -17,6 +16,14 @@ const (
 	DefaultLossTimeout    = 1000 * time.Millisecond
 	DefaultPixelWireTime  = 30 * time.Microsecond
 	DefaultLatchTime      = 300 * time.Microsecond
+)
+
+type runState byte
+
+const (
+	stateWaitBlackout runState = iota
+	stateWaitBlackoutCompletion
+	stateRunningArtNet
 )
 
 type Options struct {
@@ -93,6 +100,8 @@ type Snapshot struct {
 	WireGuardUS       int64        `json:"wire_guard_us"`
 	DMABusy           bool         `json:"dma_busy"`
 	BlackLatched      bool         `json:"black_latched"`
+	ArtNetWaiting     bool         `json:"artnet_waiting"`
+	Link              bool         `json:"link"`
 	DisplayGeneration uint64       `json:"display_generation"`
 	PublishedGeneration uint64     `json:"published_generation"`
 	PublishedReady      bool       `json:"published_ready"`
@@ -188,11 +197,14 @@ type Controller struct {
 	lastAccepted time.Time
 	lastComplete time.Time
 
-	nextOutput time.Time
+	state runState
+	policyEnabled bool
+	policyWaiting bool
+	link bool
+	lastSubmit time.Time
 	dmaBusy bool
 	dmaReadyAt time.Time
 	blackLatched bool
-	everRunning bool
 
 	counters Counters
 	ingestTiming sampleRing
@@ -223,6 +235,10 @@ func New(cfg cfgpkg.Config, targetIP string, opts Options) (*Controller, error) 
 		expected: map[uint16]expectedUniverse{},
 		universePackets: map[uint16]uint64{},
 		universeLastSeen: map[uint16]time.Time{},
+		state: stateWaitBlackout,
+		policyEnabled: true,
+		policyWaiting: true,
+		link: true,
 	}
 	totalBytes := 0
 	expectedIndex := 0
@@ -309,6 +325,15 @@ func (c *Controller) abandonLocked() {
 	c.candidateStarted = time.Time{}
 }
 
+func (c *Controller) clearReceiverLocked() {
+	c.candidateMask = 0
+	c.candidateStarted = time.Time{}
+	c.publishedReady = false
+	c.seqMode = 0
+	c.seqValid = false
+	c.sealed = false
+}
+
 func (c *Controller) expireLocked(now time.Time) {
 	if c.candidateMask != 0 && !c.candidateStarted.IsZero() && now.Sub(c.candidateStarted) > c.opts.PartialTimeout {
 		c.abandonLocked()
@@ -316,7 +341,6 @@ func (c *Controller) expireLocked(now time.Time) {
 	if !c.lastAccepted.IsZero() && now.Sub(c.lastAccepted) > c.opts.SequenceReset {
 		c.seqMode = 0
 		c.seqValid = false
-		c.seq = 0
 		c.sealed = false
 	}
 }
@@ -329,142 +353,232 @@ func (c *Controller) IngestPacket(pkt []byte, now time.Time) {
 		c.mu.Unlock()
 	}()
 
+	// runtime_receiver.h increments packets before every validation branch.
 	c.counters.Packets++
-	c.expireLocked(now)
 
-	p, err := artnet.ParseDmx(pkt)
-	if err != nil {
+	// Exact active Teensy receiver header checks:
+	// Art-Net\0, OpDmx 0x5000 (little-endian bytes 00 50), protocol >= 14,
+	// even ArtDmx length 2..512, exact UDP payload size, 15-bit port-address.
+	if len(pkt) < 18 ||
+		string(pkt[:8]) != "Art-Net\x00" ||
+		pkt[8] != 0 || pkt[9] != 0x50 ||
+		(int(pkt[10])*256+int(pkt[11])) < 14 {
 		c.counters.Rejected++
 		return
 	}
-	e, ok := c.expected[p.Universe]
+	length := int(pkt[16])*256 + int(pkt[17])
+	if length < 2 || length > 512 || length&1 != 0 || len(pkt) != 18+length || pkt[15]&0x80 != 0 {
+		c.counters.Rejected++
+		return
+	}
+	universe := uint16(pkt[14]) + uint16(pkt[15])*256
+	e, ok := c.expected[universe]
 	if !ok {
 		c.counters.Ignored++
 		return
 	}
-	if len(p.Data) < e.minPayload {
+	// Firmware compares against the useful route length. Since wire length must
+	// already be even, an odd useful tail such as 99 bytes naturally requires 100.
+	if length < e.dataBytes {
 		c.counters.Rejected++
 		return
 	}
 
-	if p.Sequence == 0 {
-		if c.seqMode == 2 {
-			c.abandonLocked()
-			c.seqValid = false
-			c.seq = 0
-			c.sealed = false
-		}
-		c.seqMode = 1
-		if c.candidateMask&e.bit != 0 {
-			// Sequence zero has no ordering. A duplicate universe before
-			// completion starts a new candidate with this packet.
-			c.counters.Duplicates++
+	// The firmware calls expire() only after the packet passed header, universe
+	// lookup and route-length validation. Rejected/ignored traffic cannot keep or
+	// advance the candidate/sequence timeout state.
+	c.expireLocked(now)
+
+	seq := pkt[12]
+	if seq != 0 {
+		if !c.seqValid && c.candidateMask != 0 {
 			c.abandonLocked()
 		}
-	} else {
-		if c.seqMode == 1 {
-			c.abandonLocked()
-			c.seqMode = 2
-			c.seqValid = true
-			c.seq = p.Sequence
-			c.sealed = false
-		} else if c.seqMode == 0 || !c.seqValid {
-			c.seqMode = 2
-			c.seqValid = true
-			c.seq = p.Sequence
-			c.sealed = false
-		} else if p.Sequence == c.seq {
-			if c.sealed || c.candidateMask&e.bit != 0 {
-				c.counters.Duplicates++
-				return
-			}
-		} else {
-			d := sequenceDistance(c.seq, p.Sequence)
-			if d >= 1 && d <= 127 {
-				c.abandonLocked()
-				c.seq = p.Sequence
-				c.sealed = false
-			} else {
+		if c.seqValid && seq != c.seq {
+			delta := (int(seq) + 255 - int(c.seq)) % 255
+			if delta > 127 {
 				c.counters.Stale++
 				return
 			}
+			c.abandonLocked()
+		} else if c.seqValid && seq == c.seq && c.sealed {
+			c.counters.Duplicates++
+			return
 		}
+		if !c.seqValid || seq != c.seq {
+			c.seq = seq
+			c.seqValid = true
+			c.sealed = false
+		}
+		c.seqMode = 2
+	} else {
+		if c.seqValid {
+			c.abandonLocked()
+		}
+		c.seqValid = false
+		c.sealed = false
+		c.seqMode = 1
+	}
+
+	if c.candidateMask&e.bit != 0 {
+		c.counters.Duplicates++
+		if seq != 0 {
+			return
+		}
+		// Sequence zero carries no ordering information. The active firmware
+		// abandons the current partial candidate and starts again with the
+		// duplicate packet.
+		c.abandonLocked()
 	}
 
 	if c.candidateMask == 0 {
 		c.candidateStarted = now
 	}
-	copy(c.candidate[e.frameOff:e.frameOff+e.dataBytes], p.Data[:e.dataBytes])
+	copy(c.candidate[e.frameOff:e.frameOff+e.dataBytes], pkt[18:18+e.dataBytes])
 	c.candidateMask |= e.bit
 	c.counters.Accepted++
-	c.universePackets[p.Universe]++
-	c.universeLastSeen[p.Universe] = now
+	c.universePackets[universe]++
+	c.universeLastSeen[universe] = now
 	c.lastAccepted = now
 
-	if c.candidateMask == c.expectedMask {
-		if c.publishedReady {
-			c.counters.CompleteReplaced++
-		}
-		copy(c.published, c.candidate)
-		c.publishedReady = true
-		c.publishedGeneration++
-		c.counters.Complete++
-		c.lastComplete = now
-		if !c.candidateStarted.IsZero() {
-			c.assemblyTiming.add(now.Sub(c.candidateStarted))
-		}
-		c.candidateMask = 0
-		c.candidateStarted = time.Time{}
-		if p.Sequence != 0 {
-			c.sealed = true
-		}
+	if c.candidateMask != c.expectedMask {
+		return
 	}
+	if c.publishedReady {
+		c.counters.CompleteReplaced++
+	}
+	copy(c.published, c.candidate)
+	c.publishedReady = true
+	c.publishedGeneration++
+	c.counters.Complete++
+	c.lastComplete = now
+	if !c.candidateStarted.IsZero() {
+		c.assemblyTiming.add(now.Sub(c.candidateStarted))
+	}
+	c.candidateMask = 0
+	c.candidateStarted = time.Time{}
+	c.sealed = seq != 0
 }
 
 func (c *Controller) wireGuardLocked() time.Duration {
 	longest := 0
 	for _, r := range c.routes {
-		if r.cfg.PixelCount > longest { longest = r.cfg.PixelCount }
+		if r.cfg.PixelCount > longest {
+			longest = r.cfg.PixelCount
+		}
 	}
 	return time.Duration(longest)*c.opts.PixelWireTime + c.opts.LatchTime
+}
+
+func (c *Controller) framePeriodLocked() time.Duration {
+	// web_main.cpp uses ceil(1,000,000 / target_fps) microseconds and then
+	// clamps the period to the longest physical wire guard.
+	us := (1_000_000 + c.opts.OutputFPS - 1) / c.opts.OutputFPS
+	period := time.Duration(us) * time.Microsecond
+	if guard := c.wireGuardLocked(); guard > period {
+		period = guard
+	}
+	return period
+}
+
+func (c *Controller) transferReadyLocked(now time.Time) bool {
+	if !c.dmaBusy {
+		return true
+	}
+	if now.Before(c.dmaReadyAt) {
+		return false
+	}
+	c.dmaBusy = false
+	c.counters.DMACompleted++
+	return true
+}
+
+func (c *Controller) dueLocked(now time.Time) bool {
+	return c.counters.FramesSubmitted == 0 || c.lastSubmit.IsZero() || now.Sub(c.lastSubmit) >= c.framePeriodLocked()
+}
+
+func (c *Controller) submitLocked(now time.Time, black bool) {
+	if black {
+		clear(c.display)
+		c.displayGeneration++
+		c.counters.Blackouts++
+	}
+	c.counters.FramesSubmitted++
+	c.lastSubmit = now
+	c.dmaBusy = true
+	c.dmaReadyAt = now.Add(c.wireGuardLocked())
+	// Firmware submit() clears blackLatched for every DMA submission. It is set
+	// true only after a blackout DMA has fully completed.
+	c.blackLatched = false
+}
+
+func (c *Controller) SetLink(link bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.link = link
 }
 
 func (c *Controller) Tick(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Main firmware loop calls receiver.expire(now) every iteration.
 	c.expireLocked(now)
-	if c.dmaBusy && !now.Before(c.dmaReadyAt) {
-		c.dmaBusy = false
-		c.counters.DMACompleted++
+
+	ready := c.transferReadyLocked(now)
+
+	// artnet_run::Policy::observe() runs only in RunningArtNet.
+	action := byte(0) // 0 wait, 1 render, 2 blackout, 3 discard
+	if c.state == stateRunningArtNet && c.policyEnabled {
+		fresh := !c.lastComplete.IsZero() && now.Sub(c.lastComplete) <= c.opts.LossTimeout
+		if !c.link || !fresh {
+			wasPlaying := !c.policyWaiting
+			c.policyWaiting = true
+			if wasPlaying {
+				action = 2
+			} else if !c.link || c.publishedReady {
+				action = 3
+			}
+		} else if c.publishedReady {
+			c.policyWaiting = false
+			action = 1
+		}
+
+		if action == 2 || action == 3 {
+			c.clearReceiverLocked()
+		}
+		if action == 2 {
+			// requestStop(RunningArtNet) enters the blackout handoff path while
+			// preserving the ARTNET-ON user intent.
+			c.state = stateWaitBlackout
+		}
 	}
 
-	period := time.Second / time.Duration(c.opts.OutputFPS)
-	if c.nextOutput.IsZero() {
-		c.nextOutput = now
-	}
+	due := c.dueLocked(now)
 
-	if c.publishedReady && !c.dmaBusy && !now.Before(c.nextOutput) {
-		copy(c.display, c.published)
-		c.publishedReady = false
-		c.displayGeneration = c.publishedGeneration
-		c.counters.FramesSubmitted++
-		c.everRunning = true
-		c.blackLatched = false
-		c.dmaBusy = true
-		c.dmaReadyAt = now.Add(c.wireGuardLocked())
-		c.nextOutput = now.Add(period)
+	if c.state == stateWaitBlackout && ready && due {
+		// controller::start() and signal-loss recovery both establish a physical
+		// black frame before Art-Net owns the LEDs.
+		c.submitLocked(now, true)
+		c.state = stateWaitBlackoutCompletion
 		return
 	}
 
-	if c.everRunning && !c.blackLatched && !c.lastComplete.IsZero() && now.Sub(c.lastComplete) > c.opts.LossTimeout && !c.dmaBusy {
-		clear(c.display)
-		c.displayGeneration++
+	if c.state == stateWaitBlackoutCompletion && ready {
 		c.blackLatched = true
-		c.counters.Blackouts++
-		c.dmaBusy = true
-		c.dmaReadyAt = now.Add(c.wireGuardLocked())
-		c.nextOutput = now.Add(period)
+		if c.policyEnabled {
+			// Firmware clears any frames that arrived during blackout ownership.
+			c.clearReceiverLocked()
+			c.state = stateRunningArtNet
+		}
+		return
+	}
+
+	if c.state == stateRunningArtNet && ready && due && action == 1 && c.publishedReady {
+		copy(c.display, c.published)
+		c.publishedReady = false
+		c.displayGeneration = c.publishedGeneration
+		c.submitLocked(now, false)
 	}
 }
 
@@ -479,13 +593,12 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 	case 1: mode = "sequence-zero"
 	case 2: mode = "sequenced"
 	}
-	state := "waiting"
-	if c.blackLatched {
-		state = "blackout"
-	} else if c.everRunning {
-		state = "running-artnet"
-	} else if c.publishedReady {
-		state = "frame-ready"
+	state := "WAIT_BLACKOUT"
+	switch c.state {
+	case stateWaitBlackoutCompletion:
+		state = "WAIT_BLACKOUT_COMPLETION"
+	case stateRunningArtNet:
+		state = "ARTNET_RUNNING"
 	}
 	age := 0.0
 	if c.candidateMask != 0 && !c.candidateStarted.IsZero() {
@@ -525,6 +638,8 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 		WireGuardUS: c.wireGuardLocked().Microseconds(),
 		DMABusy: c.dmaBusy,
 		BlackLatched: c.blackLatched,
+		ArtNetWaiting: c.policyEnabled && c.policyWaiting,
+		Link: c.link,
 		DisplayGeneration: c.displayGeneration,
 		PublishedGeneration: c.publishedGeneration,
 		PublishedReady: c.publishedReady,
