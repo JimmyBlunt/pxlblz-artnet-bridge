@@ -242,3 +242,28 @@ At 120 FPS that is 0.001 % of the 8.3 ms frame budget; real sends are dominated 
 UDP syscalls (2–3 ms for 193 universes). No correctness regressions in any profile.
 The stress profile warns about ~49 % adapter backpressure skips on both branches — the
 120 FPS / 32768 px WebSocket input side, not the Art-Net output; unchanged by v0.3.
+
+## P2 — v0.3 60 FPS headroom (10 min) and installation soak (60 min), 2026-09-26
+
+Same machine/toolchain as P1, commit ec37979, one virtual receiver per controller.
+
+```text
+headroom: --controller-fps 60, 600 s, expected 2640 pkt/s                 PASS, no warnings
+  LOOP_A  59.995 fps   540 pkt/s  35997 frames  incompl 0 gaps 0  interval p99 18.43 ms  max 60.87 ms
+  LOOP_B  59.997 fps   360 pkt/s  35999 frames  incompl 0 gaps 0  interval p99 19.00 ms  max 48.87 ms
+  LOOP_C  59.998 fps  1740 pkt/s  36000 frames  incompl 0 gaps 0  interval p99 18.86 ms  max 86.26 ms
+  router send avg p50/p99 0.40/0.95 ms, heap 0.6 -> 1.9 MB, goroutines <= 11
+
+soak: installation 60/30/30 FPS, 3600 s                                   PASS, no warnings
+  LOOP_A  60.000 fps   540 pkt/s  216001 frames  incompl 0 gaps 0  interval p99 18.72 ms  max 39.31 ms
+  LOOP_B  30.000 fps   180 pkt/s  108001 frames  incompl 0 gaps 0  interval p99 35.42 ms  max 53.09 ms
+  LOOP_C  30.000 fps   870 pkt/s  108001 frames  incompl 0 gaps 0  interval p99 35.34 ms  max 49.28 ms
+  router send avg p50/p99 0.33/0.78 ms, max 8.98 ms; heap 0.6 -> 0.8 MB (max 2.4), 23 GCs, goroutines <= 11
+  adapter 216120 produced / 215730 sent (0.18 % backpressure skips), wrong size 0
+```
+
+Reading: 432 003 controller frames in one hour without a single incomplete frame,
+sequence gap, duplicate or late packet; no heap growth, no goroutine leak, no FPS drift.
+Isolated frame-interval maxima (40–86 ms, i.e. a few frames late, never lost) are OS
+scheduling hiccups on a non-realtime laptop; p99 stays within 12 % of the period.
+Software side of v0.3 is done; remaining gate is hardware V1–V4.
