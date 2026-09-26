@@ -79,14 +79,14 @@ try {
   Write-Host "Session file: $sessionFile"
   Write-Host ""
   Write-Host "Next terminal:"
-  Write-Host "  cd /d \"$worktree\""
+  Write-Host ('  cd /d "' + $worktree + '"')
   Write-Host "  npm run dev"
   Write-Host ""
   Write-Host "Open:"
   Write-Host "  http://localhost:5174/PXLBLZ-IDE/studio?pxout=1"
   Write-Host ""
   Write-Host "Browser Console cookie command:"
-  Write-Host "  document.cookie = \"pxlblz_session=$token; path=/; SameSite=Lax\""
+  Write-Host ('  document.cookie = "pxlblz_session=' + $token + '; path=/; SameSite=Lax"')
   Write-Host ""
   Write-Host "Then verify:"
   Write-Host "  fetch('/api/me').then(r => r.json()).then(console.log)"
