@@ -35,6 +35,8 @@ const settings = {
   outputFps: Number(arg('output-fps', base.outputFps)),
   seconds: Number(arg('seconds', base.seconds)),
   config: base.config,
+  // installation only: force every controller to this FPS (headroom test), 0 = use config
+  controllerFps: Number(arg('controller-fps', '0')),
 }
 if (!Number.isInteger(settings.pixels) || settings.pixels <= 0) throw new Error('pixels must be a positive integer')
 for (const key of ['inputFps', 'outputFps', 'seconds']) {
@@ -135,6 +137,9 @@ function createConfig() {
     const source = JSON.parse(fs.readFileSync(path.join(routerRoot, 'config', 'routes.multi-loopback.json'), 'utf8'))
     source.input.pixel_count = settings.pixels
     source.artnet.udp_port = udpPort
+    if (settings.controllerFps > 0) {
+      for (const c of source.controllers) c.fps_target = settings.controllerFps
+    }
     return source
   }
   if (settings.config === 'backpanel') {

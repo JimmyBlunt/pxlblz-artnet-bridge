@@ -163,6 +163,12 @@ Run:
 run-performance.bat installation
 ```
 
+Headroom variant — every controller at 60 FPS (44 universes × 60 = 2640 packets/s expected):
+
+```bat
+node perf-testun-performance.mjs --profile installation --controller-fps 60 --seconds 600
+```
+
 Extra result files: `probe-<controller>.json` / `probe-<controller>.log`;
 `summary.json` gains `probes` (per controller) and `expected.controllers`.
 `summary.probe` holds the fastest controller so `compare-results.mjs` keeps working.
