@@ -9,8 +9,13 @@ go build -trimpath -ldflags "-s -w" -o dist\windows\artnet-listener.exe .\cmd\ar
 if errorlevel 1 exit /b 1
 go build -trimpath -ldflags "-s -w" -o dist\windows\pxlblz-frame-sender.exe .\cmd\pxlblz-frame-sender
 if errorlevel 1 exit /b 1
+go build -trimpath -ldflags "-s -w" -o dist\windows\artnet-probe.exe .\cmd\artnet-probe
+if errorlevel 1 exit /b 1
+go build -trimpath -ldflags "-s -w" -o dist\windows\pxlblz-virtual-controller.exe .\cmd\pxlblz-virtual-controller
+if errorlevel 1 exit /b 1
 copy /Y dist\windows\pxlblz-router.exe pxlblz-router.exe >nul
 copy /Y dist\windows\artnet-listener.exe artnet-listener.exe >nul
 copy /Y dist\windows\artnet-probe.exe artnet-probe.exe >nul
 copy /Y dist\windows\pxlblz-frame-sender.exe pxlblz-frame-sender.exe >nul
+copy /Y dist\windows\pxlblz-virtual-controller.exe pxlblz-virtual-controller.exe >nul
 echo Windows x64 binaries built.
