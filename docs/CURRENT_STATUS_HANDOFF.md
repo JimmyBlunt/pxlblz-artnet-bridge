@@ -4,7 +4,7 @@
 **Bridge repository:** `JimmyBlunt/pxlblz-artnet-bridge`  
 **PXLBLZ upstream:** `jon-whiteroomsoftware/PXLBLZ-IDE`  
 **Pinned PXLBLZ commit used for the integration:** `d685125b34c694f311972e258efb48d12cf05cd8`  
-**Current bridge generation:** Router v0.2.0 + experimental direct PXLBLZ browser output
+**Current bridge generation:** Router v0.2.1 + direct PXLBLZ browser output + virtual/performance regression gates
 
 ---
 
@@ -117,7 +117,7 @@ TX 30.0 fps
 
 This proves the browser/render-to-router transport and exact frame-size agreement.
 
-**Still pending:** deliberate visual confirmation that a recognizable live PXLBLZ pattern is mapped correctly across the real physical panels.
+**Still pending externally:** deliberate visual confirmation on the physical installation, plus exact APA102 routing data that has never been supplied.
 
 ---
 
@@ -468,49 +468,37 @@ pxlblz-artnet-output
 
 ---
 
-## 8. Current blocking point
+## 8. Windows Studio status — VERIFIED
 
-The next functional goal is to enter authenticated **PXLBLZ Studio** locally and perform the real visual pattern test.
+The upstream managed `npm run dev:main` coordinator still assumes Unix process
+tools and is not used natively on Windows.
 
-Real GitHub/Google login does not work in a default local checkout because local OAuth credentials are intentionally absent.
-
-PXLBLZ provides synthetic local identities for development.
-
-However, its managed command:
+The bridge now includes:
 
 ```text
-npm run dev:main
+pxlblz-integration/prepare-windows-local-studio.ps1
 ```
 
-currently assumes Unix process tools such as:
+It prepares the direct Vite/Cloudflare runtime, local D1, synthetic
+`github:local-dev` identity and session cookie.
+
+The complete flow is CI-verified on Windows against exact upstream commit
+`d685125b34c694f311972e258efb48d12cf05cd8`:
 
 ```text
-ps -axo ...
-lsof ...
+npm ci
+→ install integration
+→ PXLBLZ production build
+→ clean patch check
+→ local D1 migrations
+→ synthetic local-dev
+→ session mint
+→ npm run dev
+→ /api/me signed out false
+→ exact Cookie header
+→ /api/me authenticated true
+→ user.id github:local-dev
 ```
-
-On native Windows the coordinator fails with errors such as:
-
-```text
-ps: illegal option -- x
-Timed out waiting for http://localhost:5174/api/me
-```
-
-This is a PXLBLZ local-runtime coordinator portability issue, not an Art-Net problem.
-
-### Current planned Windows workaround
-
-Use the normal Vite + Cloudflare Worker path directly:
-
-1. Keep a clean local `main` worktree so PXLBLZ's session helper can identify it.
-2. Keep `.dev.vars` in the main worktree with a local `SESSION_SECRET`.
-3. Copy/link that file into the Art-Net worktree for direct Vite use.
-4. Run local D1 migrations manually.
-5. Seed `github:local-dev` manually in local D1.
-6. Run ordinary `npm run dev`.
-7. Run `npm run dev:session -- --developer`.
-8. Set the returned `pxlblz_session` cookie in the browser.
-9. Open `/PXLBLZ-IDE/studio?pxout=1`.
 
 See `docs/WINDOWS_PXLBLZ_LOCAL_STUDIO.md`.
 
@@ -535,11 +523,17 @@ npm ci
 
 ---
 
-## 9. Known additional controllers still to integrate
+## 9. Known additional controllers
 
-The current router hardware verification concentrated on BACK_PANEL_249.
+The router now includes `routes.installation-known.json`, containing all three
+controllers whose exact route data is currently known. The combined route is
+virtually verified over real loopback UDP at 44 universes/frame and 1320
+packets/s at 30 FPS.
 
-Known installation routing from the earlier TouchDesigner configuration:
+BACK_PANEL_249 is hardware verified. WS2812_NODE and PANEL8_251 still require
+physical visual confirmation on the installation.
+
+Known routing from the earlier TouchDesigner configuration:
 
 ### WS2812_NODE
 
@@ -618,13 +612,9 @@ These items are important and intentionally preserved for later:
 
 ## 11. Next milestones in order
 
-### G8 — Local Studio access on Windows
+### G8 — Local Studio access on Windows — PASS
 
-Complete the manual synthetic-session workaround and reach Studio with:
-
-```text
-?pxout=1
-```
+Native-Windows synthetic Studio authentication is automated and CI verified.
 
 ### G9 — Visual PXLBLZ hardware verification
 
@@ -637,13 +627,13 @@ Use an unmistakable test pattern and verify:
 - correct P6/P7 continuity across physical Panel 6
 - animation movement matches PXLBLZ preview
 
-### G10 — Add remaining controllers
+### G10 — Remaining physical controller acceptance
 
-Add and hardware-test:
+The known WS2812_NODE and PANEL8_251 routes are implemented and virtually
+verified. Hardware-test them with the safe port-ID test.
 
-- WS2812_NODE / 10.0.0.244
-- PANEL8_251 / 10.0.0.251
-- APA102 controller once confirmed
+APA102 remains blocked on missing exact route/IP/universe data and must not be
+guessed.
 
 ### G11 — Proper PXLBLZ output UI
 
