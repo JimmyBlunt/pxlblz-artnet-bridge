@@ -38,6 +38,7 @@ if (!(Test-Path $mainDevVars)) {
 }
 
 $vars = Get-Content $mainDevVars -Raw
+$vars = $vars.TrimStart([char]0xFEFF)
 $needsSecret = $vars -match '(?m)^SESSION_SECRET\s*=\s*$' -or
                $vars -match '(?m)^SESSION_SECRET\s*=\s*replace-with-a-long-local-secret\s*$'
 if ($needsSecret) {
@@ -46,11 +47,18 @@ if ($needsSecret) {
   try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
   $secret = [Convert]::ToBase64String($bytes)
   $vars = [regex]::Replace($vars, '(?m)^SESSION_SECRET\s*=.*$', "SESSION_SECRET=$secret")
-  Set-Content -Path $mainDevVars -Value $vars -Encoding utf8
 }
 
+# Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding utf8.
+# Cloudflare's .dev.vars parser treats a BOM on the first key as part of the
+# key name, while PXLBLZ's own JS parser trims it. That produces a token signed
+# with a secret the Worker cannot see. Normalize both copies to UTF-8 no BOM.
+$vars = $vars.TrimEnd("`r", "`n") + "`r`n"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($mainDevVars, $vars, $utf8NoBom)
+
 $worktreeDevVars = Join-Path $worktree ".dev.vars"
-Copy-Item $mainDevVars $worktreeDevVars -Force
+[System.IO.File]::WriteAllText($worktreeDevVars, $vars, $utf8NoBom)
 
 Push-Location $worktree
 try {
@@ -84,9 +92,11 @@ try {
   Write-Host ""
   Write-Host "Open:"
   Write-Host "  http://localhost:5174/PXLBLZ-IDE/studio?pxout=1"
-  Write-Host ""
-  Write-Host "Browser Console cookie command:"
-  Write-Host ('  document.cookie = "pxlblz_session=' + $token + '; path=/; SameSite=Lax"')
+  if ($env:GITHUB_ACTIONS -ne "true") {
+    Write-Host ""
+    Write-Host "Browser Console cookie command:"
+    Write-Host ('  document.cookie = "pxlblz_session=' + $token + '; path=/; SameSite=Lax"')
+  }
   Write-Host ""
   Write-Host "Then verify:"
   Write-Host "  fetch('/api/me').then(r => r.json()).then(console.log)"
