@@ -11,7 +11,7 @@ if not exist "%ROUTER%" goto :missing
 
 echo.
 echo Starting virtual BACK_PANEL receiver...
-start "PXLBLZ Virtual BACK_PANEL" cmd /k ""%VC%" --config config\routes.backpanel-virtual.json --target-ip 127.0.0.1 --listen 127.0.0.1:6454 --web 127.0.0.1:9982"
+start "PXLBLZ Virtual BACK_PANEL" cmd /k ""%VC%" --config config\routes.backpanel-all.json --target-ip 10.0.0.253 --listen 127.0.0.1:6454 --web 127.0.0.1:9982"
 timeout /t 1 /nobreak >nul
 
 echo Starting PXLBLZ router against the virtual receiver...
