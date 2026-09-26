@@ -65,9 +65,13 @@ func TestDisplayRGBConvertsWireOrder(t *testing.T) {
 	p := dmxPacket(t, 1, 1, 3)
 	// BuildDmx pads to four bytes; overwrite three useful bytes.
 	p[18], p[19], p[20] = 20, 10, 30
-	now := time.Unix(20,0)
+	start := time.Unix(20,0)
+	runningAt := bootToRunning(t, c, start)
+	now := runningAt.Add(time.Millisecond)
 	c.IngestPacket(p, now)
-	c.Tick(now)
+	due := start.Add(33334 * time.Microsecond)
+	if now.After(due) { due = now }
+	c.Tick(due)
 	got := c.DisplayRGB()
 	want := []byte{10,20,30}
 	for i := range want {
