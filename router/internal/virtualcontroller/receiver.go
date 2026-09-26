@@ -95,6 +95,7 @@ type Snapshot struct {
 	BlackLatched      bool         `json:"black_latched"`
 	DisplayGeneration uint64       `json:"display_generation"`
 	PublishedGeneration uint64     `json:"published_generation"`
+	PublishedReady      bool       `json:"published_ready"`
 	Counters          Counters     `json:"counters"`
 	Timing            TimingStats  `json:"timing"`
 	Routes            []RouteInfo      `json:"routes"`
