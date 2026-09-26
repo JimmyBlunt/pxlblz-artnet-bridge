@@ -42,3 +42,8 @@ jobs:
 
       - name: Run exact-adapter virtual E2E
         run: node pxlblz-integration/virtual-test/run-virtual-e2e.mjs
+
+      - name: Verify fresh-clone Windows launcher
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: router\run-installation-known-preflight.bat
