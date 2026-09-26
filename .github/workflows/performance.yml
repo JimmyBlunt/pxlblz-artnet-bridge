@@ -20,6 +20,7 @@ on:
           - perf
           - soak
           - stress
+          - installation
       seconds:
         description: Optional duration override in seconds
         required: false
@@ -61,7 +62,7 @@ jobs:
             MESSAGE="${{ github.event.head_commit.message }}"
             PROFILE="smoke"
             SECONDS=""
-            if [[ "$MESSAGE" =~ \[perf=(smoke|perf|soak|stress)\] ]]; then
+            if [[ "$MESSAGE" =~ \[perf=(smoke|perf|soak|stress|installation)\] ]]; then
               PROFILE="${BASH_REMATCH[1]}"
             fi
             if [[ "$MESSAGE" =~ \[seconds=([0-9]+)\] ]]; then

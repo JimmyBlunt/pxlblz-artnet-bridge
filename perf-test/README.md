@@ -139,12 +139,40 @@ Run:
 run-performance.bat stress
 ```
 
+### installation (v0.3 multi-controller)
+
+Simulates the whole installation output with **one virtual Art-Net receiver per
+controller**. Uses `router/config/routes.multi-loopback.json` (real .244 / .251 /
+.253 universe layout) on 127.0.0.1 / .2 / .3:
+
+```text
+LOOP_A_60FPS  127.0.0.1   9 universes  60 FPS  GRB
+LOOP_B_30FPS  127.0.0.2   6 universes  30 FPS  BGR
+LOOP_C_30FPS  127.0.0.3  29 universes  30 FPS  RGB (BACK_PANEL layout)
+input 60 FPS, 20 seconds, expected 1590 packets/s
+```
+
+Each controller gets its own frame-aware `artnet-probe` bound to its IP, so
+completeness, sequence gaps and FPS are checked **per controller** against that
+controller's own `fps_target`. The router runs without `--fps` so the
+per-controller scheduler is exercised; `--output-fps` is ignored for this profile.
+
+Run:
+
+```bat
+run-performance.bat installation
+```
+
+Extra result files: `probe-<controller>.json` / `probe-<controller>.log`;
+`summary.json` gains `probes` (per controller) and `expected.controllers`.
+`summary.probe` holds the fastest controller so `compare-results.mjs` keeps working.
+
 ## Custom overrides
 
 Direct Node invocation supports:
 
 ```text
---profile smoke|perf|soak|stress
+--profile smoke|perf|soak|stress|installation
 --seconds N
 --pixels N
 --input-fps N

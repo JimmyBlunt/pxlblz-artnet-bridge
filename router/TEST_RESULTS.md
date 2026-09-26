@@ -197,3 +197,48 @@ perf-test/run-performance.mjs regexes against router stdout: 11 RX lines + Final
 
 Not run locally: `run-virtual-e2e.mjs` and `run-performance.mjs` (need `tsc`).
 PASS (software). Hardware V1–V4 still open.
+
+## P1 — Performance lab: virtual Art-Net controllers, `main` vs v0.3 (2026-09-26)
+
+Windows 11, i5-1345U laptop (P+E cores, on battery profile unknown), Go 1.27.0, Node 24,
+TypeScript 5.8.3. Every run: exact PXLBLZ adapter → router (WebSocket) → frame-aware
+`artnet-probe` virtual receiver(s). `main` = `fix/perf-lab-script` (main + lab repairs).
+
+Lab repairs needed first (both on `fix/perf-lab-script`, merged here):
+
+- `perf-test/run-performance.mjs` was unparsable since 9390418 (`$'` in a `String.replace`
+  replacement spliced the file tail in three times) — rebuilt.
+- `artnet-probe` used the OS default UDP buffer (64 KiB on Windows); a 193-universe stress
+  burst (~100 KB) overflowed it and produced false incomplete frames on **both** branches.
+  Now `--rcvbuf` 8 MiB by default.
+
+New profile `installation`: three virtual controllers, one probe each (127.0.0.1/.2/.3).
+
+```text
+profile       side  result  probe fps           pps     incompl gaps  send avg p50/p99 ms
+smoke         main  PASS    30.00                 871   0       0     0.44 / 0.63
+smoke         v0.3  PASS    30.00                 870   0       0     0.35 / 0.48
+perf          main  PASS    60.00                1740   0       0     0.44 / 0.59
+perf          v0.3  PASS    60.00                1740   0       0     0.44 / 0.57
+stress #1     main  PASS   120.00               23161   0       0     2.60 / 3.23
+stress #1     v0.3  PASS   120.00               23162   0       0     2.91 / 3.81
+stress #2     main  PASS   120.00               23162   0       0     2.83 / 3.59
+stress #2     v0.3  PASS   119.97               23155   0       0     2.93 / 4.06
+installation  v0.3  PASS    60.00/30.00/30.00   540/180/870  0  0     0.43 / 0.64
+installation  v0.3  PASS    (second run, identical per-controller figures)
+```
+
+Dry-run SendFrame microbenchmarks, 10 interleaved runs each, median (min):
+
+```text
+                     main              v0.3
+BackPanel8186        385 ns (326)      469 ns (358)
+RGB32768            2953 ns (2565)    3850 ns (2581)
+GRB32768           48189 ns (41057)  45037 ns (40467)
+```
+
+Reading: v0.3 adds a fixed ~80 ns per controller frame (mutex + atomic counters), 0 allocs.
+At 120 FPS that is 0.001 % of the 8.3 ms frame budget; real sends are dominated by the
+UDP syscalls (2–3 ms for 193 universes). No correctness regressions in any profile.
+The stress profile warns about ~49 % adapter backpressure skips on both branches — the
+120 FPS / 32768 px WebSocket input side, not the Art-Net output; unchanged by v0.3.

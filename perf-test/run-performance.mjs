@@ -21,10 +21,13 @@ const profiles = {
   perf:   { pixels: 8186,  inputFps: 120, outputFps: 60,  seconds: 60, config: 'backpanel' },
   soak:   { pixels: 8186,  inputFps: 60,  outputFps: 30,  seconds: 900, config: 'backpanel' },
   stress: { pixels: 32768, inputFps: 120, outputFps: 120, seconds: 60, config: 'synthetic' },
+  // v0.3 multi-controller: .244/.251/.253 universe layout on three virtual
+  // controllers (127.0.0.1/.2/.3), each at its own configured FPS (60/30/30).
+  installation: { pixels: 8186, inputFps: 60, outputFps: 60, seconds: 20, config: 'installation' },
 }
 
 const profileName = arg('profile', 'smoke')
-if (!profiles[profileName]) throw new Error(`unknown --profile ${profileName}; use smoke|perf|soak|stress`)
+if (!profiles[profileName]) throw new Error(`unknown --profile ${profileName}; use ${Object.keys(profiles).join('|')}`)
 const base = profiles[profileName]
 const settings = {
   pixels: Number(arg('pixels', base.pixels)),
@@ -128,6 +131,12 @@ function parseBenchmarks(text) {
 }
 
 function createConfig() {
+  if (settings.config === 'installation') {
+    const source = JSON.parse(fs.readFileSync(path.join(routerRoot, 'config', 'routes.multi-loopback.json'), 'utf8'))
+    source.input.pixel_count = settings.pixels
+    source.artnet.udp_port = udpPort
+    return source
+  }
   if (settings.config === 'backpanel') {
     const source = JSON.parse(fs.readFileSync(path.join(routerRoot, 'config', 'routes.backpanel-all.json'), 'utf8'))
     source.input.pixel_count = settings.pixels
@@ -167,8 +176,37 @@ fs.writeFileSync(machinePath, JSON.stringify(machine, null, 2) + '\n')
 
 const cfg = createConfig()
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n')
-const universes = expectedUniverseCount(cfg)
-const expectedPps = universes * settings.outputFps
+
+// One virtual Art-Net receiver (frame-aware probe) per controller. Single-
+// controller profiles keep the original file layout (probe.json, probe.log).
+const multiController = Array.isArray(cfg.controllers) && cfg.controllers.length > 1
+const virtualControllers = multiController
+  ? cfg.controllers.filter(c => c.enabled !== false).map(c => {
+    const routes = cfg.routes.filter(r => r.enabled && r.target_ip === c.target_ip)
+    const ctrlConfigPath = path.join(tmp, `routes-${c.name}.json`)
+    fs.writeFileSync(ctrlConfigPath, JSON.stringify({ ...cfg, controllers: [c], routes }, null, 2) + '\n')
+    return {
+      name: c.name,
+      ip: c.target_ip,
+      fps: c.fps_target || cfg.input.fps_target,
+      universes: expectedUniverseCount({ routes }),
+      configPath: ctrlConfigPath,
+      reportPath: path.join(resultRoot, `probe-${c.name}.json`),
+      logPath: path.join(resultRoot, `probe-${c.name}.log`),
+    }
+  })
+  : [{
+    name: 'ALL',
+    ip: '127.0.0.1',
+    fps: settings.outputFps,
+    universes: expectedUniverseCount(cfg),
+    configPath,
+    reportPath: probeReportPath,
+    logPath: probeLogPath,
+  }]
+const universes = virtualControllers.reduce((sum, c) => sum + c.universes, 0)
+const expectedPps = virtualControllers.reduce((sum, c) => sum + c.universes * c.fps, 0)
+const fastestFps = Math.max(...virtualControllers.map(c => c.fps))
 
 console.log('=== Performance profile ===')
 console.log(JSON.stringify({ profile: profileName, ...settings, universes, expectedPps, resultRoot }, null, 2))
@@ -219,25 +257,29 @@ const probeBin = path.join(tmp, process.platform === 'win32' ? 'artnet-probe.exe
 run('go', ['build', '-o', routerBin, './cmd/pxlblz-router'], { cwd: routerRoot })
 run('go', ['build', '-o', probeBin, './cmd/artnet-probe'], { cwd: routerRoot })
 
-let probe
+const probes = []
 let router
 let driver
 try {
-  console.log('=== Start frame-aware Art-Net probe ===')
-  probe = start(probeBin, [
-    '--config', configPath,
-    '--bind', `127.0.0.1:${udpPort}`,
-    '--duration', `${settings.seconds}s`,
-    '--report', probeReportPath,
-    '--quiet',
-  ], routerRoot)
-  await waitForText(probe, 'Art-Net performance probe')
+  for (const vc of virtualControllers) {
+    console.log(`=== Start frame-aware Art-Net probe ${vc.name} on ${vc.ip}:${udpPort} (${vc.universes} universes @ ${vc.fps} fps) ===`)
+    const probe = start(probeBin, [
+      '--config', vc.configPath,
+      '--bind', `${vc.ip}:${udpPort}`,
+      '--duration', `${settings.seconds}s`,
+      '--report', vc.reportPath,
+      '--quiet',
+    ], routerRoot)
+    probes.push(probe)
+    await waitForText(probe, 'Art-Net performance probe')
+  }
 
   console.log('=== Start router ===')
   router = start(routerBin, [
     '--config', configPath,
     '--input', 'ws',
-    '--fps', String(settings.outputFps),
+    // multi-controller: no override, every controller runs at its own fps_target
+    ...(multiController ? [] : ['--fps', String(settings.outputFps)]),
     '--ws-listen', `127.0.0.1:${wsPort}`,
     '--duration', `${settings.seconds + 4}s`,
   ], routerRoot)
@@ -254,9 +296,10 @@ try {
     '--mode', 'static',
   ], tmp)
 
-  await new Promise((resolve, reject) => {
-    probe.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`probe exited ${code}`)))
-  })
+  await Promise.all(probes.map((probe, i) => new Promise((resolve, reject) => {
+    if (probe.child.exitCode !== null) return probe.child.exitCode === 0 ? resolve() : reject(new Error(`probe ${virtualControllers[i].name} exited ${probe.child.exitCode}`))
+    probe.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`probe ${virtualControllers[i].name} exited ${code}`)))
+  })))
   await new Promise((resolve, reject) => {
     if (driver.child.exitCode !== null) return driver.child.exitCode === 0 ? resolve() : reject(new Error(`driver exited ${driver.child.exitCode}`))
     driver.child.once('exit', code => code === 0 ? resolve() : reject(new Error(`driver exited ${code}`)))
@@ -267,14 +310,17 @@ try {
   })
 } finally {
   fs.writeFileSync(routerLogPath, (router?.stdout ?? '') + (router?.stderr ?? ''))
-  fs.writeFileSync(probeLogPath, (probe?.stdout ?? '') + (probe?.stderr ?? ''))
+  probes.forEach((probe, i) => fs.writeFileSync(virtualControllers[i].logPath, (probe?.stdout ?? '') + (probe?.stderr ?? '')))
   fs.writeFileSync(driverLogPath, (driver?.stdout ?? '') + (driver?.stderr ?? ''))
   await stop(driver)
   await stop(router)
-  await stop(probe)
+  for (const probe of probes) await stop(probe)
 }
 
-const probeReport = JSON.parse(fs.readFileSync(probeReportPath, 'utf8'))
+const probeReports = virtualControllers.map(vc => JSON.parse(fs.readFileSync(vc.reportPath, 'utf8')))
+// The fastest controller is the reference for compare-results.mjs (summary.probe).
+const probeReport = probeReports[virtualControllers.findIndex(vc => vc.fps === fastestFps)]
+const allProbes = check => probeReports.every((report, i) => check(report, virtualControllers[i]))
 
 const routerSamples = []
 const rx = /RX\s+([\d.]+) fps \| replaced\s+(\d+)\/s invalid (\d+)\/s clients (\d+) \| TX\s+([\d.]+) fps\s+(\d+) pkt\/s \| send avg\s+([\d.]+) ms last\s+([\d.]+) ms max\s+([\d.]+) ms \| heap\s+([\d.]+) MB gc (\d+) goroutines (\d+) \| errors (\d+)/g
@@ -304,34 +350,37 @@ fs.writeFileSync(samplesPath, csv)
 
 const sendAvg = routerSamples.map(s => s.sendAvgMs).filter(v => v > 0)
 const heaps = routerSamples.map(s => s.heapMB)
-const framePeriodMs = 1000 / settings.outputFps
+const framePeriodMs = 1000 / fastestFps
 const adapterMatch = /VIRTUAL_PXLBLZ_DONE pixels=(\d+) produced=(\d+) elapsed=([\d.]+) avg_fps=([\d.]+) mode=(\w+) sent=(\d+) skipped=(\d+) not_connected=(\d+) wrong_size=(\d+) connect_attempts=(\d+)/.exec(driver.stdout)
 const finalRx = /Final RX: (\d+) valid frames, (\d+) replaced before output observation, (\d+) invalid/.exec(router.stdout)
 const finalTx = /Final TX: (\d+) frames, (\d+) packets, ([\d.]+) avg fps, ([\d.]+) packets\/s, ([\d.]+) avg send ms, ([\d.]+) max send ms, ([\d.]+) MB heap, (\d+) send errors/.exec(router.stdout)
 
 const hardChecks = {
-  probeInvalidPackets: probeReport.invalid_packets === 0,
-  probeUnexpectedUniverses: probeReport.unexpected_universes === 0,
-  probePayloadMismatches: probeReport.payload_mismatches === 0,
-  probeIncompleteFrames: probeReport.incomplete_frames === 0,
-  probeDuplicateUniverses: probeReport.duplicate_universes === 0,
-  probeSequenceGaps: probeReport.sequence_gap_events === 0,
-  probeLateSequencePackets: probeReport.late_same_sequence_packets === 0,
-  frameRate: probeReport.frames_per_second >= settings.outputFps * 0.97,
-  packetRate: probeReport.packets_per_second >= expectedPps * 0.97,
+  probeInvalidPackets: allProbes(r => r.invalid_packets === 0),
+  probeUnexpectedUniverses: allProbes(r => r.unexpected_universes === 0),
+  probePayloadMismatches: allProbes(r => r.payload_mismatches === 0),
+  probeIncompleteFrames: allProbes(r => r.incomplete_frames === 0),
+  probeDuplicateUniverses: allProbes(r => r.duplicate_universes === 0),
+  probeSequenceGaps: allProbes(r => r.sequence_gap_events === 0),
+  probeLateSequencePackets: allProbes(r => r.late_same_sequence_packets === 0),
+  frameRate: allProbes((r, vc) => r.frames_per_second >= vc.fps * 0.97),
+  packetRate: allProbes((r, vc) => r.packets_per_second >= vc.universes * vc.fps * 0.97),
   routerInvalidInput: finalRx ? Number(finalRx[3]) === 0 : false,
   routerSendErrors: finalTx ? Number(finalTx[8]) === 0 : routerSamples.every(s => s.errors === 0),
   sendDuty: percentile(sendAvg, .99) < framePeriodMs * 0.75,
-  assemblyP99: probeReport.assembly.p99_ms < Math.min(25, framePeriodMs * 0.90),
+  assemblyP99: allProbes((r, vc) => r.assembly.p99_ms < Math.min(25, 1000 / vc.fps * 0.90)),
   adapterDuty: adapterMicrobench.msPerFrame < framePeriodMs * 0.75,
   adapterWrongSize: adapterMatch ? Number(adapterMatch[9]) === 0 : false,
 }
 const warnings = []
 const heapGrowthMB = heaps.length ? heaps.at(-1) - heaps[0] : 0
 if (heapGrowthMB > 32) warnings.push(`router heap grew by ${heapGrowthMB.toFixed(1)} MB`)
-if (probeReport.frame_interval.p99_ms > framePeriodMs * 1.5) {
-  warnings.push(`frame interval p99 ${probeReport.frame_interval.p99_ms.toFixed(3)} ms exceeds 1.5x target period`)
-}
+probeReports.forEach((r, i) => {
+  const vc = virtualControllers[i]
+  if (r.frame_interval.p99_ms > 1000 / vc.fps * 1.5) {
+    warnings.push(`${vc.name}: frame interval p99 ${r.frame_interval.p99_ms.toFixed(3)} ms exceeds 1.5x target period`)
+  }
+})
 if (adapterMatch) {
   const produced = Number(adapterMatch[2])
   const skipped = Number(adapterMatch[7])
@@ -349,6 +398,7 @@ const summary = {
     universesPerFrame: universes,
     packetsPerSecond: expectedPps,
     framePeriodMs,
+    controllers: virtualControllers.map(vc => ({ name: vc.name, ip: vc.ip, fps: vc.fps, universesPerFrame: vc.universes })),
   },
   machine,
   adapterMicrobench,
@@ -383,6 +433,7 @@ const summary = {
     goroutinesMax: Math.max(...routerSamples.map(s => s.goroutines)),
   },
   probe: probeReport,
+  probes: multiController ? Object.fromEntries(virtualControllers.map((vc, i) => [vc.name, probeReports[i]])) : undefined,
   hardChecks,
   warnings,
   pass: Object.values(hardChecks).every(Boolean),
@@ -390,6 +441,7 @@ const summary = {
     summary: summaryPath,
     samples: samplesPath,
     probe: probeReportPath,
+    probes: virtualControllers.map(vc => vc.reportPath),
     routerLog: routerLogPath,
     probeLog: probeLogPath,
     driverLog: driverLogPath,
