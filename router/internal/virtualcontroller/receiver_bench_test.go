@@ -3,27 +3,35 @@ package virtualcontroller
 import (
 	"testing"
 	"time"
+
+	"pxlblz-router/internal/artnet"
 )
 
+func benchPacket(b *testing.B, u uint16, seq byte, dataBytes int) []byte {
+	b.Helper()
+	data := make([]byte, dataBytes)
+	buf := make([]byte, artnet.HeaderSize+artnet.MaxDmxPayload)
+	p, err := artnet.BuildDmx(buf, u, seq, data)
+	if err != nil { b.Fatal(err) }
+	return append([]byte(nil), p...)
+}
+
 func BenchmarkBackPanelCompleteFrame(b *testing.B) {
-	cfg := backPanelConfig()
-	c, err := New(cfg, "10.0.0.253", Options{})
+	c, err := New(backPanelConfig(), "10.0.0.253", Options{})
 	if err != nil { b.Fatal(err) }
 	universes := c.ExpectedUniverses()
 	packets := make([][]byte, len(universes))
 	for i,u := range universes {
-		packets[i] = dmxPacket(&testing.T{}, u, 1, wireDataBytes(u))
+		packets[i] = benchPacket(b, u, 1, wireDataBytes(u))
 	}
 	now := time.Unix(100,0)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i:=0;i<b.N;i++ {
 		seq := byte(i%255 + 1)
-		for j,u := range universes {
-			_ = u
-			p := append([]byte(nil), packets[j]...)
-			p[12] = seq
-			c.IngestPacket(p, now)
+		for j := range packets {
+			packets[j][12] = seq
+			c.IngestPacket(packets[j], now)
 			now = now.Add(10*time.Microsecond)
 		}
 		c.Tick(now)
@@ -34,7 +42,7 @@ func BenchmarkBackPanelCompleteFrame(b *testing.B) {
 func BenchmarkBackPanelSingleArtDmx(b *testing.B) {
 	c, err := New(backPanelConfig(), "10.0.0.253", Options{})
 	if err != nil { b.Fatal(err) }
-	p := dmxPacket(&testing.T{}, 120, 1, 510)
+	p := benchPacket(b, 120, 1, 510)
 	now := time.Unix(200,0)
 	b.ReportAllocs()
 	b.ResetTimer()
