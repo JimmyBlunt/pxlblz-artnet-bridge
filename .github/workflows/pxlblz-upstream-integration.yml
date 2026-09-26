@@ -13,27 +13,36 @@ on:
   workflow_dispatch:
 
 jobs:
-  install-and-build:
+  install-build-and-local-auth:
     runs-on: windows-latest
+
     steps:
       - name: Checkout bridge
         uses: actions/checkout@v4
         with:
           path: bridge
 
-      - name: Checkout pinned PXLBLZ upstream
+      - name: Checkout pinned PXLBLZ main
         uses: actions/checkout@v4
         with:
           repository: jon-whiteroomsoftware/PXLBLZ-IDE
           ref: d685125b34c694f311972e258efb48d12cf05cd8
-          path: pxlblz
+          path: pxlblz-main
+          fetch-depth: 0
+
+      - name: Create real main and Art-Net worktrees
+        shell: powershell
+        run: |
+          git -C ".\pxlblz-main" switch -C main d685125b34c694f311972e258efb48d12cf05cd8
+          git -C ".\pxlblz-main" worktree add "..\pxlblz" -b pxlblz-artnet-output d685125b34c694f311972e258efb48d12cf05cd8
+          git -C ".\pxlblz-main" worktree list
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: npm
-          cache-dependency-path: pxlblz/package-lock.json
+          cache-dependency-path: pxlblz-main/package-lock.json
 
       - name: Install pinned PXLBLZ dependencies
         working-directory: pxlblz
@@ -61,6 +70,59 @@ jobs:
         working-directory: pxlblz
         shell: bash
         run: git diff --check
+
+      - name: Prepare native Windows local Studio
+        shell: powershell
+        run: |
+          & ".\bridge\pxlblz-integration\prepare-windows-local-studio.ps1" -PxlblzPath ".\pxlblz" -MainPxlblzPath ".\pxlblz-main"
+          if (!(Test-Path ".\pxlblz\.pxlblz-local-session.txt")) { throw "Session file missing" }
+
+      - name: Start local Worker and verify authenticated API
+        shell: powershell
+        run: |
+          $root = (Resolve-Path ".\pxlblz").Path
+          $log = Join-Path $root "dev-ci.log"
+          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm run dev > dev-ci.log 2>&1" -WorkingDirectory $root -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(120)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              try {
+                $response = Invoke-RestMethod -Uri "http://localhost:5174/api/me" -TimeoutSec 3
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (!$ready) {
+              if (Test-Path $log) { Get-Content $log }
+              throw "Timed out waiting for local PXLBLZ Worker /api/me"
+            }
+
+            if ($response.authenticated -ne $false) {
+              throw "Signed-out /api/me should report authenticated=false"
+            }
+
+            $cookie = (Get-Content ".\pxlblz\.pxlblz-local-session.txt" -Raw).Trim()
+            if (!$cookie.StartsWith("pxlblz_session=")) { throw "Unexpected session file format" }
+
+            $auth = Invoke-RestMethod -Uri "http://localhost:5174/api/me" -Headers @{ Cookie = $cookie } -TimeoutSec 10
+            if ($auth.authenticated -ne $true) {
+              $auth | ConvertTo-Json -Depth 8
+              throw "Synthetic local developer session was not authenticated"
+            }
+            if ($auth.user.id -ne "github:local-dev") {
+              $auth | ConvertTo-Json -Depth 8
+              throw "Authenticated local user id mismatch"
+            }
+
+            Write-Host "WINDOWS_LOCAL_STUDIO_AUTH_PASS"
+            $auth | ConvertTo-Json -Depth 8
+          } finally {
+            cmd /c "taskkill /PID $($proc.Id) /T /F" 2>$null | Out-Null
+            if (Test-Path $log) { Get-Content $log }
+          }
 
       - name: Show modified files
         working-directory: pxlblz
