@@ -1,6 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "ROUTER=%~dp0..\bin\windows-x64\pxlblz-router.exe"
+if not exist "%ROUTER%" set "ROUTER=%~dp0pxlblz-router.exe"
+if not exist "%ROUTER%" goto :missing
 echo.
 echo ============================================================
 echo  PXLBLZ Art-Net - known installation safe port-ID test
@@ -15,7 +18,7 @@ echo APA102 is not included because its route is not confirmed yet.
 echo Only the small route ID bar / moving marker is lit per output.
 echo.
 pause
-pxlblz-router.exe --config config\routes.installation-known.json --pattern port-id --duration 15s
+"%ROUTER%" --config config\routes.installation-known.json --pattern port-id --duration 15s
 echo.
 echo Expected nominal aggregate TX at 30 FPS:
 echo   44 universes/frame
@@ -23,3 +26,7 @@ echo   1320 Art-Net packets/s
 echo   0 send errors
 echo.
 pause
+exit /b %errorlevel%
+:missing
+echo ERROR: pxlblz-router.exe not found. Pull bin\windows-x64 or run build-windows.bat.
+exit /b 1
