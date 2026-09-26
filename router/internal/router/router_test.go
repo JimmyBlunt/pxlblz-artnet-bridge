@@ -151,3 +151,20 @@ func TestBackPanelPort1PadsU121To100Bytes(t *testing.T) {
 		t.Fatalf("U121 padding=%d want 0", packets[121].Data[99])
 	}
 }
+
+
+func TestBrightnessScalingAndColorOrder(t *testing.T) {
+	src := []byte{100, 200, 50, 255, 128, 64}
+	var lut [256]byte
+	for i := 0; i < 256; i++ {
+		lut[i] = byte((i + 1) / 2)
+	}
+	dst := make([]byte, len(src))
+	reorderScale(dst, src, "GRB", &lut)
+	want := []byte{100, 50, 25, 64, 128, 32}
+	for i := range want {
+		if dst[i] != want[i] {
+			t.Fatalf("brightness/order dst=%v want=%v", dst, want)
+		}
+	}
+}
