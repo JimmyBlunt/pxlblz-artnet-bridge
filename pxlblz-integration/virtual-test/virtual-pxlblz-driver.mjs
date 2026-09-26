@@ -13,11 +13,14 @@ const fps = Number(args.get('fps') ?? '60')
 const seconds = Number(args.get('seconds') ?? '5')
 const url = args.get('url') ?? 'ws://127.0.0.1:9980/pixels'
 const mode = args.get('mode') ?? 'dynamic'
+const constantR = Number(args.get('r') ?? '100') / 255
+const constantG = Number(args.get('g') ?? '200') / 255
+const constantB = Number(args.get('b') ?? '50') / 255
 
 if (!Number.isInteger(pixels) || pixels <= 0) throw new Error('--pixels must be a positive integer')
 if (!Number.isFinite(fps) || fps <= 0 || fps > 240) throw new Error('--fps must be >0 and <=240')
 if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('--seconds must be >0')
-if (mode !== 'dynamic' && mode !== 'static') throw new Error('--mode must be dynamic or static')
+if (!['dynamic', 'static', 'constant'].includes(mode)) throw new Error('--mode must be dynamic, static or constant')
 
 // Minimal browser surface used by externalPixelOutput.ts. Node 22 supplies the
 // standards-compatible WebSocket and performance objects.
@@ -61,7 +64,16 @@ function updateDynamicFrame(frameNo) {
   }
 }
 
-fillBaseFrame()
+if (mode === 'constant') {
+  for (let p = 0; p < pixels; p++) {
+    const o = p * 3
+    frame[o] = constantR
+    frame[o + 1] = constantG
+    frame[o + 2] = constantB
+  }
+} else {
+  fillBaseFrame()
+}
 const started = performance.now()
 
 // Deadline-based pacing avoids cumulative setInterval drift. If the process is
@@ -75,7 +87,7 @@ while (produced < totalFrames) {
     continue
   }
   if (mode === 'dynamic') updateDynamicFrame(produced)
-  else {
+  else if (mode === 'static') {
     // Make each static transport frame observably distinct without paying for
     // a second full-frame generator pass.
     frame[0] = (produced & 255) / 255
