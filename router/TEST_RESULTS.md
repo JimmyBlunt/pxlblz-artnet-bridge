@@ -1,6 +1,6 @@
-# PXLBLZ Router v0.2.0 - Test Results
+# PXLBLZ Router v0.2.1 - Test Results
 
-Date: 2026-09-20
+Updated: 2026-09-26
 
 ## Unit tests
 
@@ -149,3 +149,48 @@ ALL_VIRTUAL_TESTS_PASS
 ```
 
 The test environment lives under `pxlblz-integration/virtual-test/`.
+
+
+## Known-installation virtual UDP gate
+
+The combined known-controller configuration was tested with all physical IPs
+temporarily redirected to localhost while preserving logical pixel ranges,
+universes and color orders.
+
+```text
+input: 8186 pixels / 24558 bytes
+controllers represented: 3
+routes: 12
+Art-Net universes/frame: 44
+router target: 30 FPS
+expected packet rate: 1320 packets/s
+orders exercised: GRB + RGB + BGR
+actual UDP loopback: yes
+invalid packets: 0
+websocket invalid frames: 0
+send errors: 0
+```
+
+The listener explicitly observed boundary universes across all three controller
+groups, including U0, U3, U6, U7, U12, U14, U120, U149, U156 and U161.
+
+PASS on Windows and Linux virtual CI.
+
+## Current software regression status
+
+As of 2026-09-26:
+
+- Go unit tests: PASS
+- exact TypeScript adapter self-test: PASS
+- exact adapter → WS → router → UDP loopback: PASS
+- BACK_PANEL production route dry-run: PASS
+- known 3-controller route over real loopback UDP: PASS
+- performance smoke lab: PASS on Windows and Linux
+- Windows PXLBLZ installer against pinned upstream: PASS
+- modified PXLBLZ production build: PASS
+- patch whitespace check: PASS
+- Windows local D1 + synthetic Studio session: PASS
+- local Worker `/api/me` with `github:local-dev`: PASS
+
+The remaining acceptance items require the real installation: visual validation
+of WS2812_NODE/PANEL8_251 and the missing exact APA102 routing data.
