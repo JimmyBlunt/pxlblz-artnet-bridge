@@ -38,7 +38,7 @@ const visualizerHTML = `<!doctype html>
 *{box-sizing:border-box}body{margin:0;padding:16px;background:#09090b}h1{font-size:18px;margin:0 0 4px}.sub{color:#a1a1aa;font-size:12px;margin-bottom:14px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:8px;margin-bottom:12px}.card{border:1px solid #27272a;background:#111113;padding:8px;border-radius:6px}.k{font-size:10px;color:#71717a;text-transform:uppercase}.v{font-size:18px;margin-top:2px}.ok{color:#4ade80}.warn{color:#fbbf24}.bad{color:#fb7185}
 #ports{width:100%;border:1px solid #27272a;background:#050506;border-radius:6px;display:block}.section{margin-top:12px}.row{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#a1a1aa}.row b{color:#e4e4e7}.bar{height:7px;background:#27272a;border-radius:9px;overflow:hidden;margin-top:4px}.bar>i{display:block;height:100%;background:#4ade80;width:0%}
-table{border-collapse:collapse;width:100%;font-size:11px;margin-top:8px}th,td{border-bottom:1px solid #27272a;padding:5px;text-align:left}th{color:#71717a}.footer{font-size:10px;color:#52525b;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:11px;margin-top:8px}th,td{border-bottom:1px solid #27272a;padding:5px;text-align:left}th{color:#71717a}.footer{font-size:10px;color:#52525b;margin-top:12px}.universes{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.u{font-size:10px;border:1px solid #27272a;border-radius:4px;padding:4px 6px;background:#111113;color:#71717a}.u.seen{color:#4ade80;border-color:#14532d}.u.missing{color:#fbbf24;border-color:#713f12}.u.recent{box-shadow:0 0 0 1px #16a34a inset}
 </style>
 </head>
 <body>
@@ -75,6 +75,7 @@ async function getStatus(){
   $('sequence').textContent=s.sequence_mode+' / '+s.sequence+(s.sequence_sealed?' sealed':'');
   $('assembly').textContent=n(s.timing.assembly_p99_us,1)+' us'; $('ingest').textContent=n(s.timing.ingest_p99_us,1)+' us';
   const c=s.counters; $('counters').innerHTML=['accepted','rejected','ignored','stale','duplicates','complete','incomplete','complete_replaced','frames_submitted','dma_completed','blackouts'].map(k=>'<span><b>'+k+'</b> '+c[k]+'</span>').join('');
+  $('universes').innerHTML=(s.universes||[]).map(u=>{const recent=u.last_seen_age_ms>=0&&u.last_seen_age_ms<1000;const cls=u.received?'seen':(recent?'seen recent':'missing');return '<span class="u '+cls+'" title="data '+u.data_bytes+' bytes · min wire '+u.min_payload+' · packets '+u.packets+' · last '+n(u.last_seen_age_ms,1)+' ms">U'+u.universe+(u.received?' ✓':'')+'</span>'}).join('');
   if(!status || JSON.stringify(status.routes)!==JSON.stringify(s.routes)){
     $('routeRows').innerHTML=s.routes.map(r=>'<tr><td>P'+r.physical_port+' '+r.name+'</td><td>'+r.pixel_count+'</td><td>U'+r.universe_start+'..U'+r.universe_end+'</td><td>'+r.color_order+'</td><td>'+n(r.brightness,2)+'</td></tr>').join('');
     $('ports').height=Math.max(90,s.routes.length*42+24);
