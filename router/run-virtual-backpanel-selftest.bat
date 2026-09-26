@@ -12,7 +12,7 @@ if not exist "%SENDER%" goto :missing
 set "SUMMARY=%TEMP%\pxlblz-virtual-backpanel-summary.json"
 if exist "%SUMMARY%" del "%SUMMARY%"
 
-start "Virtual BACK_PANEL" /b "%VC%" --config config\routes.backpanel-virtual.json --target-ip 127.0.0.1 --listen 127.0.0.1:6454 --web 127.0.0.1:9982 --duration 9s --summary-json "%SUMMARY%"
+start "Virtual BACK_PANEL" /b "%VC%" --config config\routes.backpanel-all.json --target-ip 10.0.0.253 --listen 127.0.0.1:6454 --web 127.0.0.1:9982 --duration 9s --summary-json "%SUMMARY%"
 timeout /t 1 /nobreak >nul
 start "Router to Virtual BACK_PANEL" /b "%ROUTER%" --config config\routes.backpanel-virtual.json --input ws --duration 7s
 timeout /t 1 /nobreak >nul
