@@ -59,6 +59,7 @@ func main() {
 	duration := flag.Duration("duration", 10*time.Second, "measurement duration")
 	reportPath := flag.String("report", "", "optional JSON report path")
 	quiet := flag.Bool("quiet", false, "suppress periodic text stats")
+	rcvBuf := flag.Int("rcvbuf", 8<<20, "UDP receive buffer bytes; the OS default (64 KiB on Windows) drops packets from large universe bursts")
 	flag.Parse()
 
 	if *configPath == "" {
@@ -74,6 +75,12 @@ func main() {
 	conn, err := net.ListenUDP("udp4", addr)
 	fatal(err)
 	defer conn.Close()
+	// A real controller buffers a whole frame in hardware. Give the virtual
+	// receiver enough socket buffer that measurements reflect the router, not
+	// the probe being descheduled during a burst of hundreds of universes.
+	if *rcvBuf > 0 {
+		fatal(conn.SetReadBuffer(*rcvBuf))
+	}
 
 	fmt.Printf("Art-Net performance probe on %s | expected universes=%d\n", *bind, len(expected))
 
