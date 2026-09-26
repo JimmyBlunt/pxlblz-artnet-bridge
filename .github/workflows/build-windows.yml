@@ -38,6 +38,7 @@ jobs:
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/artnet-listener.exe ./cmd/artnet-listener
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/artnet-probe.exe ./cmd/artnet-probe
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/pxlblz-virtual-controller.exe ./cmd/pxlblz-virtual-controller
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/windows-x64/pxlblz-receiver-probe.exe ./cmd/pxlblz-receiver-probe
           cd ..
           sha256sum bin/windows-x64/*.exe > bin/windows-x64/SHA256SUMS.txt
 
