@@ -1,0 +1,68 @@
+name: PXLBLZ upstream integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pxlblz-integration/**'
+      - '.github/workflows/pxlblz-upstream-integration.yml'
+  pull_request:
+    paths:
+      - 'pxlblz-integration/**'
+      - '.github/workflows/pxlblz-upstream-integration.yml'
+  workflow_dispatch:
+
+jobs:
+  install-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v4
+        with:
+          path: bridge
+
+      - name: Checkout pinned PXLBLZ upstream
+        uses: actions/checkout@v4
+        with:
+          repository: jon-whiteroomsoftware/PXLBLZ-IDE
+          ref: d685125b34c694f311972e258efb48d12cf05cd8
+          path: pxlblz
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: pxlblz/package-lock.json
+
+      - name: Install pinned PXLBLZ dependencies
+        working-directory: pxlblz
+        run: npm ci
+
+      - name: Apply bridge integration
+        shell: powershell
+        run: |
+          & ".\bridge\pxlblz-integration\install-pxlblz-output.ps1" -PxlblzPath ".\pxlblz"
+
+      - name: Verify integration files
+        shell: powershell
+        run: |
+          if (!(Test-Path ".\pxlblz\src\engine\externalPixelOutput.ts")) { throw "externalPixelOutput.ts missing" }
+          $preview = Get-Content ".\pxlblz\src\components\Preview.tsx" -Raw
+          if (!$preview.Contains("createExternalPixelOutput")) { throw "Preview import/hook missing" }
+          if (!$preview.Contains("paintPacked")) { throw "packed render hook missing" }
+          if (!$preview.Contains("externalPixelOutput?.close()")) { throw "output cleanup missing" }
+
+      - name: Build modified PXLBLZ
+        working-directory: pxlblz
+        run: npm run build
+
+      - name: Check patch cleanliness
+        working-directory: pxlblz
+        shell: bash
+        run: git diff --check
+
+      - name: Show modified files
+        working-directory: pxlblz
+        shell: bash
+        run: git status --short
