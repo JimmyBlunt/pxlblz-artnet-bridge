@@ -12,6 +12,10 @@ on:
       - '.github/workflows/pxlblz-upstream-integration.yml'
   workflow_dispatch:
 
+concurrency:
+  group: pxlblz-upstream-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   install-build-and-local-auth:
     runs-on: windows-latest
