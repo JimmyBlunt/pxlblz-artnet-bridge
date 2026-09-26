@@ -43,6 +43,12 @@ type Counters struct {
 	Blackouts        uint64 `json:"blackouts"`
 }
 
+type UniverseInfo struct {
+	Universe   uint16 `json:"universe"`
+	DataBytes  int    `json:"data_bytes"`
+	MinPayload int    `json:"min_payload"`
+}
+
 type RouteInfo struct {
 	Name          string  `json:"name"`
 	PhysicalPort  int     `json:"physical_port"`
@@ -521,6 +527,17 @@ func wireToRGB(dst, src []byte, order string) {
 		}
 		dst[i], dst[i+1], dst[i+2] = rgb[0], rgb[1], rgb[2]
 	}
+}
+
+func (c *Controller) UniverseInfo() []UniverseInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]UniverseInfo, 0, len(c.expected))
+	for _, e := range c.expected {
+		out = append(out, UniverseInfo{Universe: e.universe, DataBytes: e.dataBytes, MinPayload: e.minPayload})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Universe < out[j].Universe })
+	return out
 }
 
 func (c *Controller) ExpectedUniverses() []uint16 {
