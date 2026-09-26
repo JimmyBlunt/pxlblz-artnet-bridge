@@ -15,9 +15,14 @@ func (c *Controller) Handler() http.Handler {
     _ = json.NewEncoder(w).Encode(c.Snapshot(time.Now()))
   })
   mux.HandleFunc("/api/frame", func(w http.ResponseWriter, r *http.Request) {
+    frame, err := c.FrameRGB(r.URL.Query().Get("stage"))
+    if err != nil {
+      http.Error(w, err.Error(), http.StatusBadRequest)
+      return
+    }
     w.Header().Set("Content-Type", "application/octet-stream")
     w.Header().Set("Cache-Control", "no-store")
-    _, _ = w.Write(c.DisplayRGB())
+    _, _ = w.Write(frame)
   })
   mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
     if r.URL.Path != "/" { http.NotFound(w, r); return }
@@ -83,7 +88,7 @@ async function getStatus(){
   last=s;lastAt=now;status=s;
 }
 async function getFrame(){
-  if(!status)return; const b=await fetch('/api/frame',{cache:'no-store'}).then(r=>r.arrayBuffer());frame=new Uint8Array(b);draw();
+  if(!status)return; const stage=$('stage').value; const b=await fetch('/api/frame?stage='+encodeURIComponent(stage),{cache:'no-store'}).then(r=>r.arrayBuffer());frame=new Uint8Array(b);draw();
 }
 function draw(){
   if(!status||!frame)return;const c=$('ports'),x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);
