@@ -14,6 +14,10 @@ on:
       - '.github/workflows/virtual-integration.yml'
   workflow_dispatch:
 
+concurrency:
+  group: virtual-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   virtual-e2e:
     strategy:
