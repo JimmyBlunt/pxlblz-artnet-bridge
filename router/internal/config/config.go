@@ -27,14 +27,22 @@ type ArtNet struct {
 }
 
 type Route struct {
-	Name          string `json:"name"`
-	Enabled       bool   `json:"enabled"`
-	TargetIP      string `json:"target_ip"`
-	PhysicalPort  int    `json:"physical_port,omitempty"`
-	PixelStart    int    `json:"pixel_start"`
-	PixelCount    int    `json:"pixel_count"`
-	UniverseStart int    `json:"universe_start"`
-	ColorOrder    string `json:"color_order"`
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	TargetIP      string   `json:"target_ip"`
+	PhysicalPort  int      `json:"physical_port,omitempty"`
+	PixelStart    int      `json:"pixel_start"`
+	PixelCount    int      `json:"pixel_count"`
+	UniverseStart int      `json:"universe_start"`
+	ColorOrder    string   `json:"color_order"`
+	Brightness    *float64 `json:"brightness,omitempty"`
+}
+
+func (r Route) BrightnessLevel() float64 {
+	if r.Brightness == nil {
+		return 1
+	}
+	return *r.Brightness
 }
 
 func Load(path string) (Config, error) {
@@ -111,6 +119,9 @@ func (c Config) Validate() error {
 		}
 		if !validOrder(r.ColorOrder) {
 			return fmt.Errorf("%s: unsupported color_order %q", where, r.ColorOrder)
+		}
+		if level := r.BrightnessLevel(); level < 0 || level > 1 {
+			return fmt.Errorf("%s: brightness must be 0..1", where)
 		}
 		spansByIP[r.TargetIP] = append(spansByIP[r.TargetIP], span{r.UniverseStart, r.UniverseStart + universes - 1, r.Name})
 	}
