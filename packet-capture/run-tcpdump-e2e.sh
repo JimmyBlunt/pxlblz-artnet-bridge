@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROUTER_ROOT="$ROOT/router"
 OUT_DIR="${1:-$ROOT/packet-capture/results}"
 mkdir -p "$OUT_DIR"
