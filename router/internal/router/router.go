@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strings"
 	"time"
@@ -16,7 +17,8 @@ type PlannedRoute struct {
 	byteStart int
 	byteCount int
 	universes int
-	scratch   []byte
+	scratch       []byte
+	brightnessLUT *[256]byte
 }
 
 type Stats struct {
@@ -69,7 +71,15 @@ func New(cfg cfgpkg.Config, dryRun bool) (*Router, error) {
 			byteCount: c.PixelCount * 3,
 			universes: (c.PixelCount + 169) / 170,
 		}
-		if c.ColorOrder != "RGB" {
+		level := c.BrightnessLevel()
+		if level != 1 {
+			lut := &[256]byte{}
+			for i := 0; i < 256; i++ {
+				lut[i] = byte(math.Round(float64(i) * level))
+			}
+			pr.brightnessLUT = lut
+		}
+		if c.ColorOrder != "RGB" || pr.brightnessLUT != nil {
 			pr.scratch = make([]byte, pr.byteCount)
 		}
 		r.routes = append(r.routes, pr)
@@ -89,11 +99,11 @@ func (r *Router) Stats() Stats { return r.stats }
 func (r *Router) RouteSummary() []string {
 	out := make([]string, 0, len(r.routes))
 	for _, p := range r.routes {
-		out = append(out, fmt.Sprintf("%-18s %-15s P%-2d pixels %d..%d  U%d..U%d  %s",
+		out = append(out, fmt.Sprintf("%-18s %-15s P%-2d pixels %d..%d  U%d..U%d  %s  level %.2f",
 			p.cfg.Name, p.cfg.TargetIP, p.cfg.PhysicalPort,
 			p.cfg.PixelStart, p.cfg.PixelStart+p.cfg.PixelCount-1,
 			p.cfg.UniverseStart, p.cfg.UniverseStart+p.universes-1,
-			p.cfg.ColorOrder))
+			p.cfg.ColorOrder, p.cfg.BrightnessLevel()))
 	}
 	return out
 }
@@ -110,7 +120,7 @@ func (r *Router) SendFrame(frame []byte) error {
 		route := &r.routes[i]
 		data := frame[route.byteStart : route.byteStart+route.byteCount]
 		if route.scratch != nil {
-			reorder(route.scratch, data, route.cfg.ColorOrder)
+			reorderScale(route.scratch, data, route.cfg.ColorOrder, route.brightnessLUT)
 			data = route.scratch
 		}
 
@@ -152,6 +162,10 @@ func (r *Router) SendFrame(frame []byte) error {
 }
 
 func reorder(dst, src []byte, order string) {
+	reorderScale(dst, src, order, nil)
+}
+
+func reorderScale(dst, src []byte, order string, lut *[256]byte) {
 	idx := [3]int{0, 1, 2}
 	for i, c := range strings.ToUpper(order) {
 		switch c {
@@ -164,8 +178,16 @@ func reorder(dst, src []byte, order string) {
 		}
 	}
 	for i := 0; i < len(src); i += 3 {
-		dst[i] = src[i+idx[0]]
-		dst[i+1] = src[i+idx[1]]
-		dst[i+2] = src[i+idx[2]]
+		a := src[i+idx[0]]
+		b := src[i+idx[1]]
+		cc := src[i+idx[2]]
+		if lut != nil {
+			a = lut[a]
+			b = lut[b]
+			cc = lut[cc]
+		}
+		dst[i] = a
+		dst[i+1] = b
+		dst[i+2] = cc
 	}
 }
