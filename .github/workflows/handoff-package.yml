@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: handoff-package-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   handoff:
     runs-on: ubuntu-latest

@@ -88,6 +88,25 @@ function queryUrl(): string {
   }
 }
 
+
+export function externalPixelOutputPreference(): boolean {
+  return queryEnabled()
+}
+
+export function externalPixelOutputUrlPreference(): string {
+  return queryUrl()
+}
+
+export function setExternalPixelOutputPreference(enabled: boolean): void {
+  const store = storage()
+  try {
+    if (enabled) store?.setItem(SESSION_ENABLED_KEY, '1')
+    else store?.removeItem(SESSION_ENABLED_KEY)
+  } catch {
+    // sessionStorage is a convenience only; the URL flag remains authoritative.
+  }
+}
+
 function clampByte(v: number): number {
   if (!Number.isFinite(v) || v <= 0) return 0
   if (v >= 1) return 255

@@ -1,6 +1,6 @@
-# PXLBLZ Router v0.2.0 - Test Results
+# PXLBLZ Router v0.2.1 - Test Results
 
-Date: 2026-09-20
+Updated: 2026-09-26
 
 ## Unit tests
 
@@ -149,3 +149,98 @@ ALL_VIRTUAL_TESTS_PASS
 ```
 
 The test environment lives under `pxlblz-integration/virtual-test/`.
+
+
+## Known-installation virtual UDP gate
+
+The combined known-controller configuration was tested with all physical IPs
+temporarily redirected to localhost while preserving logical pixel ranges,
+universes and color orders.
+
+```text
+input: 8186 pixels / 24558 bytes
+controllers represented: 3
+routes: 12
+Art-Net universes/frame: 44
+router target: 30 FPS
+expected packet rate: 1320 packets/s
+orders exercised: GRB + RGB + BGR
+actual UDP loopback: yes
+invalid packets: 0
+websocket invalid frames: 0
+send errors: 0
+```
+
+The listener explicitly observed boundary universes across all three controller
+groups, including U0, U3, U6, U7, U12, U14, U120, U149, U156 and U161.
+
+PASS on Windows and Linux virtual CI.
+
+## Current software regression status
+
+As of 2026-09-26:
+
+- Go unit tests: PASS
+- exact TypeScript adapter self-test: PASS
+- exact adapter → WS → router → UDP loopback: PASS
+- BACK_PANEL production route dry-run: PASS
+- known 3-controller route over real loopback UDP: PASS
+- performance smoke lab: PASS on Windows and Linux
+- Windows PXLBLZ installer against pinned upstream: PASS
+- modified PXLBLZ production build: PASS
+- patch whitespace check: PASS
+- Windows local D1 + synthetic Studio session: PASS
+- local Worker `/api/me` with `github:local-dev`: PASS
+
+The remaining acceptance items require the real installation: visual validation
+of WS2812_NODE/PANEL8_251 and the missing exact APA102 routing data.
+
+## TCP dump wire-level verification
+
+A production-route packet capture now verifies what actually leaves the router's
+UDP socket. The test assigns the real controller IPs to Linux loopback aliases,
+runs the exact production `routes.installation-known.json`, captures
+`udp port 6454` with `tcpdump`, and validates the resulting PCAP independently.
+
+Captured result:
+
+```text
+6512 ArtDmx packets captured
+44 packets expected per complete logical frame
+148 complete sequence groups
+destination 10.0.0.244 present
+destination 10.0.0.253 present
+destination 10.0.0.251 present
+all ArtDmx payload lengths even
+BACK_PANEL U138 absent
+unexpected packets 0
+status PASS
+TCPDUMP_ARTNET_PASS
+```
+
+Receiver-sensitive BACK_PANEL tail lengths were confirmed directly from PCAP:
+
+```text
+U121 100 bytes
+U126 174 bytes
+U132  90 bytes
+U137 390 bytes
+U141  36 bytes
+U145 300 bytes
+U149   6 bytes
+```
+
+The capture also uses a deterministic logical RGB test value
+`(100, 200, 50)` and verifies physical color order plus route brightness from
+the actual captured ArtDmx payload bytes:
+
+```text
+10.0.0.244 U0    GRB × 0.70 -> captured 140, 70, 35
+10.0.0.253 U120  RGB × 0.30 -> captured  30, 60, 15
+10.0.0.251 U156  BGR × 0.70 -> captured  35,140, 70
+```
+
+PASS.
+
+The CI workflow is `.github/workflows/tcpdump-wire.yml`. It uploads the raw
+PCAP, decoded tcpdump text, verifier JSON and router log as an artifact.

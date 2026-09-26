@@ -18,13 +18,16 @@ physical LEDs
 
 ## Current status
 
-- Router v0.2 live-input path verified on Windows
+- Router v0.2.1 live-input path verified on Windows
 - Binary WebSocket input on `ws://127.0.0.1:9980/pixels`
 - Latest-frame semantics: old video frames are replaced, never queued
 - Art-Net universe routing with receiver-compatible even-length final payloads
 - BACK_PANEL_249 hardware test passed across all **7 electrical outputs / 6 physical panels**
 - External sender 60 FPS → router 30 FPS → 29 Art-Net universes → real LEDs: PASS
-- Experimental direct PXLBLZ IDE render-frame adapter is now included under `pxlblz-integration/`
+- Experimental direct PXLBLZ IDE render-frame adapter is included under `pxlblz-integration/`
+- Native-Windows local Studio synthetic authentication is automated and CI verified
+- Known 3-controller installation route is virtually verified at 44 universes/frame
+- Virtual exact-adapter and performance gates pass on Windows and Linux
 
 ## Repository layout
 
@@ -108,3 +111,22 @@ It validates Float-to-RGB888 conversion, websocket backpressure semantics, the
 BACK_PANEL routing dry-run. CI runs the same gate on Linux and Windows.
 
 See `pxlblz-integration/virtual-test/README.md`.
+
+
+## All currently known installation controllers
+
+`router/config/routes.installation-known.json` contains the three controllers
+whose exact routing is known:
+
+```text
+10.0.0.244  WS2812_NODE   GRB
+10.0.0.253  BACK_PANEL_249 RGB
+10.0.0.251  PANEL8_251    BGR
+```
+
+Together they produce 44 Art-Net packets/universes per logical frame, or 1320
+packets/s at 30 FPS. The combined mapping is tested over real loopback UDP in
+the virtual integration gate.
+
+APA102 is intentionally excluded until its exact physical routing data is
+confirmed.

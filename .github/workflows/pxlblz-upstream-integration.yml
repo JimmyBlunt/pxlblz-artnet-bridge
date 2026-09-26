@@ -1,0 +1,143 @@
+name: PXLBLZ upstream integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pxlblz-integration/**'
+      - '.github/workflows/pxlblz-upstream-integration.yml'
+  pull_request:
+    paths:
+      - 'pxlblz-integration/**'
+      - '.github/workflows/pxlblz-upstream-integration.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: pxlblz-upstream-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-build-and-local-auth:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v4
+        with:
+          path: bridge
+
+      - name: Checkout pinned PXLBLZ main
+        uses: actions/checkout@v4
+        with:
+          repository: jon-whiteroomsoftware/PXLBLZ-IDE
+          ref: d685125b34c694f311972e258efb48d12cf05cd8
+          path: pxlblz-main
+          fetch-depth: 0
+
+      - name: Create real main and Art-Net worktrees
+        shell: powershell
+        run: |
+          git -C ".\pxlblz-main" switch -C main d685125b34c694f311972e258efb48d12cf05cd8
+          git -C ".\pxlblz-main" worktree add "..\pxlblz" -b pxlblz-artnet-output d685125b34c694f311972e258efb48d12cf05cd8
+          git -C ".\pxlblz-main" worktree list
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: pxlblz-main/package-lock.json
+
+      - name: Install pinned PXLBLZ dependencies
+        working-directory: pxlblz
+        run: npm ci
+
+      - name: Apply bridge integration
+        shell: powershell
+        run: |
+          & ".\bridge\pxlblz-integration\install-pxlblz-output.ps1" -PxlblzPath ".\pxlblz"
+
+      - name: Verify integration files
+        shell: powershell
+        run: |
+          if (!(Test-Path ".\pxlblz\src\engine\externalPixelOutput.ts")) { throw "externalPixelOutput.ts missing" }
+          if (!(Test-Path ".\pxlblz\src\components\ExternalPixelOutputToggle.tsx")) { throw "ExternalPixelOutputToggle.tsx missing" }
+          $preview = Get-Content ".\pxlblz\src\components\Preview.tsx" -Raw
+          $previewDeck = Get-Content ".\pxlblz\src\components\PreviewDeck.tsx" -Raw
+          if (!$preview.Contains("createExternalPixelOutput")) { throw "Preview import/hook missing" }
+          if (!$preview.Contains("paintPacked")) { throw "packed render hook missing" }
+          if (!$preview.Contains("externalPixelOutput?.close()")) { throw "output cleanup missing" }
+          if (!$previewDeck.Contains("ExternalPixelOutputToggle")) { throw "PreviewDeck output toggle missing" }
+          if (!$previewDeck.Contains("<ExternalPixelOutputToggle />")) { throw "PreviewDeck output toggle mount missing" }
+
+      - name: Build modified PXLBLZ
+        working-directory: pxlblz
+        run: npm run build
+
+      - name: Check patch cleanliness
+        working-directory: pxlblz
+        shell: bash
+        run: git diff --check
+
+      - name: Prepare native Windows local Studio
+        shell: powershell
+        run: |
+          & ".\bridge\pxlblz-integration\prepare-windows-local-studio.ps1" -PxlblzPath ".\pxlblz" -MainPxlblzPath ".\pxlblz-main"
+          if (!(Test-Path ".\pxlblz\.pxlblz-local-session.txt")) { throw "Session file missing" }
+
+      - name: Start local Worker and verify authenticated API
+        shell: powershell
+        run: |
+          $root = (Resolve-Path ".\pxlblz").Path
+          $log = Join-Path $root "dev-ci.log"
+          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm run dev > dev-ci.log 2>&1" -WorkingDirectory $root -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(120)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              try {
+                $response = Invoke-RestMethod -Uri "http://localhost:5174/api/me" -TimeoutSec 3
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (!$ready) {
+              if (Test-Path $log) { Get-Content $log }
+              throw "Timed out waiting for local PXLBLZ Worker /api/me"
+            }
+
+            if ($response.authenticated -ne $false) {
+              throw "Signed-out /api/me should report authenticated=false"
+            }
+
+            $cookie = (Get-Content ".\pxlblz\.pxlblz-local-session.txt" -Raw).Trim()
+            if (!$cookie.StartsWith("pxlblz_session=")) { throw "Unexpected session file format" }
+
+            # Windows PowerShell 5.1 treats Cookie as a special HTTP header.
+            # Use curl.exe so the test proves the exact Cookie header reaches
+            # the Worker rather than relying on Invoke-RestMethod's header shim.
+            $authJson = (& curl.exe --silent --show-error --fail -H "Cookie: $cookie" "http://localhost:5174/api/me" | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "curl.exe authenticated /api/me request failed" }
+            $auth = $authJson | ConvertFrom-Json
+            if ($auth.authenticated -ne $true) {
+              Write-Host $authJson
+              throw "Synthetic local developer session was not authenticated"
+            }
+            if ($auth.user.id -ne "github:local-dev") {
+              Write-Host $authJson
+              throw "Authenticated local user id mismatch"
+            }
+
+            Write-Host "WINDOWS_LOCAL_STUDIO_AUTH_PASS"
+            $auth | ConvertTo-Json -Depth 8
+          } finally {
+            cmd /c "taskkill /PID $($proc.Id) /T /F" 2>$null | Out-Null
+            if (Test-Path $log) { Get-Content $log }
+          }
+
+      - name: Show modified files
+        working-directory: pxlblz
+        shell: bash
+        run: git status --short

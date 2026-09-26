@@ -14,6 +14,10 @@ on:
       - '.github/workflows/virtual-integration.yml'
   workflow_dispatch:
 
+concurrency:
+  group: virtual-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   virtual-e2e:
     strategy:
@@ -40,5 +44,15 @@ jobs:
       - name: Install TypeScript compiler
         run: npm install --global typescript@5.8.3
 
+      - name: Race-test virtual receiver
+        if: runner.os == 'Linux'
+        working-directory: router
+        run: go test -race ./internal/virtualcontroller
+
       - name: Run exact-adapter virtual E2E
         run: node pxlblz-integration/virtual-test/run-virtual-e2e.mjs
+
+      - name: Verify fresh-clone Windows launcher
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: router\run-installation-known-preflight.bat

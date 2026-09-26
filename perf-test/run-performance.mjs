@@ -115,11 +115,11 @@ function expectedUniverseCount(cfg) {
 
 function parseBenchmarks(text) {
   const result = {}
-  const line = /^(Benchmark\S+?)(?:-\d+)?\s+\d+\s+([\d.]+)\s+ns\/op\s+([\d.]+)\s+MB\/s\s+(\d+)\s+B\/op\s+(\d+)\s+allocs\/op$/gm
+  const line = /^(Benchmark\S+?)(?:-\d+)?\s+\d+\s+([\d.]+)\s+ns\/op(?:\s+([\d.]+)\s+MB\/s)?\s+(\d+)\s+B\/op\s+(\d+)\s+allocs\/op$/gm
   for (const m of text.matchAll(line)) {
     result[m[1]] = {
       nsPerOp: Number(m[2]),
-      mbPerSec: Number(m[3]),
+      mbPerSec: m[3] === undefined ? null : Number(m[3]),
       bytesPerOp: Number(m[4]),
       allocsPerOp: Number(m[5]),
     }
@@ -208,10 +208,17 @@ const wsBench = run('go', [
   'test', '-run', '^$', '-bench', 'BenchmarkReadFrameIntoReuse98K', '-benchmem',
   '-benchtime=1s', './internal/wsmini',
 ], { cwd: routerRoot })
-const benchText = routerBench.stdout + routerBench.stderr + '\n' + wsBench.stdout + wsBench.stderr
+const receiverBench = run('go', [
+  'test', '-run', '^$', '-bench', 'BenchmarkBackPanel', '-benchmem',
+  '-benchtime=1s', './internal/virtualcontroller',
+], { cwd: routerRoot })
+const benchText = routerBench.stdout + routerBench.stderr + '\n'
+  + wsBench.stdout + wsBench.stderr + '\n'
+  + receiverBench.stdout + receiverBench.stderr
 fs.writeFileSync(benchPath, benchText)
 process.stdout.write(routerBench.stdout)
 process.stdout.write(wsBench.stdout)
+process.stdout.write(receiverBench.stdout)
 const microbench = parseBenchmarks(benchText)
 
 const routerBin = path.join(tmp, process.platform === 'win32' ? 'pxlblz-router.exe' : 'pxlblz-router')
