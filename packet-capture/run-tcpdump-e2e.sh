@@ -69,7 +69,7 @@ echo "Driving exact adapter..."
   rm -rf build
   mkdir -p build
   cp "$BUILD_DIR/externalPixelOutput.js" build/
-  node virtual-pxlblz-driver.mjs --pixels 8186 --fps 60 --seconds 4
+  node virtual-pxlblz-driver.mjs --pixels 8186 --fps 60 --seconds 4 --mode constant --r 100 --g 200 --b 50
 )
 
 wait "$ROUTER_PID"
