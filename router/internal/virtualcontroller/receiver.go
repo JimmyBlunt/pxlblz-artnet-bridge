@@ -49,6 +49,15 @@ type UniverseInfo struct {
 	MinPayload int    `json:"min_payload"`
 }
 
+type UniverseStatus struct {
+	Universe      uint16  `json:"universe"`
+	DataBytes     int     `json:"data_bytes"`
+	MinPayload    int     `json:"min_payload"`
+	Received      bool    `json:"received"`
+	Packets       uint64  `json:"packets"`
+	LastSeenAgeMS float64 `json:"last_seen_age_ms"`
+}
+
 type RouteInfo struct {
 	Name          string  `json:"name"`
 	PhysicalPort  int     `json:"physical_port"`
@@ -88,7 +97,8 @@ type Snapshot struct {
 	PublishedGeneration uint64     `json:"published_generation"`
 	Counters          Counters     `json:"counters"`
 	Timing            TimingStats  `json:"timing"`
-	Routes            []RouteInfo  `json:"routes"`
+	Routes            []RouteInfo      `json:"routes"`
+	Universes         []UniverseStatus `json:"universes"`
 }
 
 type expectedUniverse struct {
@@ -156,6 +166,8 @@ type Controller struct {
 	routes   []routeRuntime
 	routeInfo []RouteInfo
 	expected map[uint16]expectedUniverse
+	universePackets map[uint16]uint64
+	universeLastSeen map[uint16]time.Time
 	expectedMask uint64
 	expectedCount int
 
@@ -208,6 +220,8 @@ func New(cfg cfgpkg.Config, targetIP string, opts Options) (*Controller, error) 
 		targetIP: targetIP,
 		opts: opts,
 		expected: map[uint16]expectedUniverse{},
+		universePackets: map[uint16]uint64{},
+		universeLastSeen: map[uint16]time.Time{},
 	}
 	totalBytes := 0
 	expectedIndex := 0
@@ -382,6 +396,8 @@ func (c *Controller) IngestPacket(pkt []byte, now time.Time) {
 	copy(c.candidate[e.frameOff:e.frameOff+e.dataBytes], p.Data[:e.dataBytes])
 	c.candidateMask |= e.bit
 	c.counters.Accepted++
+	c.universePackets[p.Universe]++
+	c.universeLastSeen[p.Universe] = now
 	c.lastAccepted = now
 
 	if c.candidateMask == c.expectedMask {
@@ -478,6 +494,23 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 	if c.seqValid || c.seqMode == 1 {
 		seq = int(c.seq)
 	}
+	universeStatus := make([]UniverseStatus, 0, len(c.expected))
+	for u, e := range c.expected {
+		age := -1.0
+		if last, ok := c.universeLastSeen[u]; ok && !last.IsZero() {
+			age = float64(now.Sub(last).Microseconds()) / 1000.0
+		}
+		universeStatus = append(universeStatus, UniverseStatus{
+			Universe: u,
+			DataBytes: e.dataBytes,
+			MinPayload: e.minPayload,
+			Received: c.candidateMask&e.bit != 0,
+			Packets: c.universePackets[u],
+			LastSeenAgeMS: age,
+		})
+	}
+	sort.Slice(universeStatus, func(i, j int) bool { return universeStatus[i].Universe < universeStatus[j].Universe })
+
 	return Snapshot{
 		TargetIP: c.targetIP,
 		State: state,
@@ -499,6 +532,7 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 			AssemblyAvgUS: aa, AssemblyP95US: ap95, AssemblyP99US: ap99, AssemblyMaxUS: amax,
 		},
 		Routes: append([]RouteInfo(nil), c.routeInfo...),
+		Universes: universeStatus,
 	}
 }
 
