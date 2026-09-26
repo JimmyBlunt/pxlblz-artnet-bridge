@@ -70,15 +70,26 @@ func TestUniverseSplit256RGB(t *testing.T) {
 	}
 }
 
-func TestColorOrderGRB(t *testing.T) {
-	dst := make([]byte, 6)
+func TestColorOrders(t *testing.T) {
 	src := []byte{1, 2, 3, 4, 5, 6}
-	reorder(dst, src, "GRB")
-	want := []byte{2, 1, 3, 5, 4, 6}
-	for i := range want {
-		if dst[i] != want[i] {
-			t.Fatalf("dst=%v want=%v", dst, want)
-		}
+	tests := map[string][]byte{
+		"RGB": {1, 2, 3, 4, 5, 6},
+		"RBG": {1, 3, 2, 4, 6, 5},
+		"GRB": {2, 1, 3, 5, 4, 6},
+		"GBR": {2, 3, 1, 5, 6, 4},
+		"BRG": {3, 1, 2, 6, 4, 5},
+		"BGR": {3, 2, 1, 6, 5, 4},
+	}
+	for order, want := range tests {
+		t.Run(order, func(t *testing.T) {
+			dst := make([]byte, len(src))
+			reorder(dst, src, order)
+			for i := range want {
+				if dst[i] != want[i] {
+					t.Fatalf("order=%s dst=%v want=%v", order, dst, want)
+				}
+			}
+		})
 	}
 }
 
