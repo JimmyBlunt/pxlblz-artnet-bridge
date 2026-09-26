@@ -526,6 +526,7 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 		BlackLatched: c.blackLatched,
 		DisplayGeneration: c.displayGeneration,
 		PublishedGeneration: c.publishedGeneration,
+		PublishedReady: c.publishedReady,
 		Counters: c.counters,
 		Timing: TimingStats{
 			IngestAvgUS: ia, IngestP95US: ip95, IngestP99US: ip99, IngestMaxUS: imax,
@@ -536,15 +537,31 @@ func (c *Controller) Snapshot(now time.Time) Snapshot {
 	}
 }
 
-func (c *Controller) DisplayRGB() []byte {
+func (c *Controller) FrameRGB(stage string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]byte, len(c.display))
+	var frame []byte
+	switch strings.ToLower(strings.TrimSpace(stage)) {
+	case "", "display":
+		frame = c.display
+	case "published":
+		frame = c.published
+	case "candidate":
+		frame = c.candidate
+	default:
+		return nil, fmt.Errorf("unknown frame stage %q", stage)
+	}
+	out := make([]byte, len(frame))
 	for _, r := range c.routes {
-		src := c.display[r.frameOff:r.frameOff+r.byteCount]
+		src := frame[r.frameOff:r.frameOff+r.byteCount]
 		dst := out[r.frameOff:r.frameOff+r.byteCount]
 		wireToRGB(dst, src, r.cfg.ColorOrder)
 	}
+	return out, nil
+}
+
+func (c *Controller) DisplayRGB() []byte {
+	out, _ := c.FrameRGB("display")
 	return out
 }
 
