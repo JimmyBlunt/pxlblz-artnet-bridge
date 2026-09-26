@@ -291,3 +291,25 @@ Gate B validates the production BACK_PANEL routing without touching hardware:
 
 Future router or PXLBLZ adapter changes should keep this gate green in addition
 to the Go unit tests. GitHub CI executes it on Linux and Windows.
+
+## Wire-level PCAP gate
+
+The software acceptance gate now includes an independent packet-capture layer.
+
+The production route table is sent to local aliases using the real controller
+addresses:
+
+```text
+10.0.0.244
+10.0.0.253
+10.0.0.251
+```
+
+`tcpdump` captures actual UDP/6454 packets and a separate PCAP verifier checks
+destination IPs, Art-Net/ArtDmx headers, universe coverage, common sequence
+groups, even payload lengths, BACK_PANEL tail lengths, the deliberate U138 gap,
+and deterministic color-order/brightness payload bytes.
+
+This prevents an internal router/listener agreement from hiding a wire-format
+mistake. The gate must remain green for future routing, color-order, brightness
+or Art-Net changes.
