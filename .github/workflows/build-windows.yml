@@ -42,6 +42,15 @@ jobs:
           cd ..
           sha256sum bin/windows-x64/*.exe > bin/windows-x64/SHA256SUMS.txt
 
+      - name: Upload Windows x64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: pxlblz-windows-x64
+          path: |
+            bin/windows-x64/*.exe
+            bin/windows-x64/SHA256SUMS.txt
+          if-no-files-found: error
+
       - name: Commit binaries
         shell: bash
         run: |
