@@ -72,8 +72,8 @@ async function getStatus(){
   const now=performance.now(); const dt=Math.max(.001,(now-lastAt)/1000);
   let pps=0,cps=0,dps=0;
   if(last){pps=(s.counters.packets-last.counters.packets)/dt;cps=(s.counters.complete-last.counters.complete)/dt;dps=(s.counters.dma_completed-last.counters.dma_completed)/dt}
-  $('identity').textContent='target '+s.target_ip+' · '+s.expected_universes+' expected universes · '+s.output_fps+' FPS · wire guard '+s.wire_guard_us+' us';
-  $('state').textContent=s.state; $('state').className='v '+(s.state==='running-artnet'?'ok':s.state==='blackout'?'bad':'warn');
+  $('identity').textContent='target '+s.target_ip+' · '+s.expected_universes+' expected universes · '+s.output_fps+' FPS · wire guard '+s.wire_guard_us+' us · link '+(s.link?'up':'down')+' · '+(s.artnet_waiting?'waiting':'playing');
+  $('state').textContent=s.state; $('state').className='v '+(s.state==='ARTNET_RUNNING'?'ok':s.state==='WAIT_BLACKOUT'?'bad':'warn');
   $('pps').textContent=n(pps); $('cps').textContent=n(cps); $('dps').textContent=n(dps);
   $('candidate').textContent=s.candidate_received+' / '+s.expected_universes;
   $('candidateBar').style.width=((s.expected_universes?s.candidate_received/s.expected_universes:0)*100)+'%';
