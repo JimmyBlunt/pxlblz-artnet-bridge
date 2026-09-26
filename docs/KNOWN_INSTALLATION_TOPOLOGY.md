@@ -14,6 +14,56 @@ pixels 0..8185
 
 ---
 
+## Routing coverage
+
+The logical frame is 8186 pixels, but the routes whose exact physical
+configuration is currently known cover **6085 unique logical pixels**.
+
+Known routed ranges:
+
+```text
+0..1183       1184 pixels  WS2812_NODE
+1440..1642     203 pixels  BACK_PANEL P1
+2720..2975     256 pixels  PANEL8 P1
+3744..7645    3902 pixels  BACK_PANEL P2-P7
+7646..8185     540 pixels  PANEL8 P2
+-----------------------------------------
+total         6085 pixels
+```
+
+Currently unrouted logical ranges:
+
+```text
+1184..1439     256 pixels
+1643..2719    1077 pixels
+2976..3743     768 pixels
+-----------------------------------------
+total         2101 pixels
+```
+
+These gaps must not be guessed. The APA102/ESP controller is known to exist, but
+the available project history does not contain enough confirmed information to
+assign its outputs to these ranges or to prove that it accounts for all gaps.
+
+The combined known-controller config is:
+
+```text
+router/config/routes.installation-known.json
+```
+
+It has been virtually validated over real loopback UDP at:
+
+```text
+8186 input pixels
+44 Art-Net universes/frame
+30 FPS
+1320 packets/s
+GRB + RGB + BGR route orders
+0 invalid packets
+```
+
+---
+
 ## BACK_PANEL_249 — VERIFIED
 
 ```text
