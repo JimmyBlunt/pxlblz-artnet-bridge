@@ -168,3 +168,60 @@ func TestBrightnessScalingAndColorOrder(t *testing.T) {
 		}
 	}
 }
+
+
+func TestBrightnessAndColorOrderOnWire(t *testing.T) {
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.LocalAddr().(*net.UDPAddr).Port
+	level := 0.5
+
+	cfg := cfgpkg.Config{
+		Version: 1,
+		Input:   cfgpkg.InputConfig{PixelCount: 1, FPSTarget: 30},
+		ArtNet:  cfgpkg.ArtNet{UDPPort: port, Unicast: true},
+		Routes: []cfgpkg.Route{{
+			Name: "scaled", Enabled: true, TargetIP: "127.0.0.1",
+			PixelStart: 0, PixelCount: 1, UniverseStart: 5,
+			ColorOrder: "GRB", Brightness: &level,
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	if err := r.SendFrame([]byte{100, 200, 50}); err != nil {
+		t.Fatal(err)
+	}
+
+	listener.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1024)
+	n, _, err := listener.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := artnet.ParseDmx(buf[:n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Universe != 5 {
+		t.Fatalf("universe=%d want 5", p.Universe)
+	}
+	want := []byte{100, 50, 25, 0}
+	if len(p.Data) != len(want) {
+		t.Fatalf("payload len=%d want %d", len(p.Data), len(want))
+	}
+	for i := range want {
+		if p.Data[i] != want[i] {
+			t.Fatalf("wire data=%v want=%v", p.Data, want)
+		}
+	}
+}
