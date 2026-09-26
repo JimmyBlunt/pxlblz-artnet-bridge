@@ -92,3 +92,20 @@ pxlblz-router.exe --config config\routes.backpanel-all.json --input ws
 Then open PXLBLZ with `?pxout=1`.
 
 The router should report a client and valid RX frames before Art-Net starts.
+
+## Output control UI
+
+The integration now adds a compact **OUT** button to the PXLBLZ Preview header.
+
+- gray `OUT`: external output disabled;
+- green `OUT`: external output enabled;
+- clicking the button stores the tab-local preference and reloads the current
+  PXLBLZ route so the render loop is rebuilt deterministically;
+- Gallery → Studio navigation keeps the output preference in the same tab;
+- closing the tab clears the session preference;
+- `?pxout=1` and `?pxout=0` remain supported for automation and recovery;
+- `pxoutUrl` remains the advanced endpoint override.
+
+The button reports **configured enabled/disabled state**, not controller health.
+The native router telemetry remains the authority for live client connection,
+RX/TX FPS, replaced frames, packet rate and send errors.
