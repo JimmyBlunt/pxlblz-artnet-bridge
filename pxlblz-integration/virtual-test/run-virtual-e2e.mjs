@@ -69,9 +69,11 @@ run('go', ['test', './...'], { cwd: routerRoot, stdio: 'inherit' })
 const routerBin = path.join(tmpDir, process.platform === 'win32' ? 'pxlblz-router.exe' : 'pxlblz-router')
 const listenerBin = path.join(tmpDir, process.platform === 'win32' ? 'artnet-listener.exe' : 'artnet-listener')
 const virtualControllerBin = path.join(tmpDir, process.platform === 'win32' ? 'pxlblz-virtual-controller.exe' : 'pxlblz-virtual-controller')
+const receiverProbeBin = path.join(tmpDir, process.platform === 'win32' ? 'pxlblz-receiver-probe.exe' : 'pxlblz-receiver-probe')
 run('go', ['build', '-o', routerBin, './cmd/pxlblz-router'], { cwd: routerRoot })
 run('go', ['build', '-o', listenerBin, './cmd/artnet-listener'], { cwd: routerRoot })
 run('go', ['build', '-o', virtualControllerBin, './cmd/pxlblz-virtual-controller'], { cwd: routerRoot })
+run('go', ['build', '-o', receiverProbeBin, './cmd/pxlblz-receiver-probe'], { cwd: routerRoot })
 
 let listener
 let router
@@ -213,6 +215,43 @@ try {
 } finally {
   await stop(router)
   await stop(virtualController)
+}
+
+console.log('=== Virtual E2E E: UDP fault-injection probe against receiver emulator ===')
+const faultCases = [
+  { name: 'short-tail', expect: c => c.rejected === 1 && c.complete === 0 && c.incomplete === 1 },
+  { name: 'missing', expect: c => c.rejected === 0 && c.complete === 0 && c.incomplete === 1 },
+  { name: 'packet-seq', expect: c => c.complete === 0 && c.incomplete > 0 },
+  { name: 'extras', expect: c => c.ignored === 4 && c.complete === 1 },
+  { name: 'seq0', expect: c => c.complete === 1 && c.rejected === 0 },
+  { name: 'duplicate0', expect: c => c.duplicates === 1 && c.incomplete === 1 && c.complete === 1 },
+]
+for (let i = 0; i < faultCases.length; i++) {
+  const testCase = faultCases[i]
+  const port = 6460 + i
+  const summaryPath = path.join(tmpDir, `fault-${testCase.name}.json`)
+  virtualController = start(virtualControllerBin, [
+    '--config', path.join(routerRoot, 'config', 'routes.backpanel-all.json'),
+    '--target-ip', '10.0.0.253',
+    '--listen', `127.0.0.1:${port}`,
+    '--web', '',
+    '--duration', '800ms',
+    '--summary-json', summaryPath,
+  ], routerRoot)
+  await waitForText(virtualController, 'Receiver model: Teensy runtime_receiver / artnet_run_policy compatible')
+  run(receiverProbeBin, [
+    '--config', path.join(routerRoot, 'config', 'routes.backpanel-all.json'),
+    '--profile-ip', '10.0.0.253',
+    '--target', `127.0.0.1:${port}`,
+    '--scenario', testCase.name,
+  ], { cwd: routerRoot, stdio: 'inherit' })
+  await new Promise(resolve => virtualController.child.once('exit', resolve))
+  const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'))
+  if (!testCase.expect(summary.counters)) {
+    throw new Error(`fault scenario ${testCase.name} counters unexpected: ${JSON.stringify(summary.counters)}`)
+  }
+  console.log(`VIRTUAL_FAULT_PASS scenario=${testCase.name} counters=${JSON.stringify(summary.counters)}`)
+  virtualController = null
 }
 
 console.log('ALL_VIRTUAL_TESTS_PASS')
