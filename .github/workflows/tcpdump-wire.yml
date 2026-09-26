@@ -1,0 +1,64 @@
+name: TCP dump wire verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'router/**'
+      - 'pxlblz-integration/**'
+      - 'packet-capture/**'
+      - '.github/workflows/tcpdump-wire.yml'
+  pull_request:
+    paths:
+      - 'router/**'
+      - 'pxlblz-integration/**'
+      - 'packet-capture/**'
+      - '.github/workflows/tcpdump-wire.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: tcpdump-wire-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: router/go.mod
+
+      - name: Install packet-capture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcpdump
+          npm install --global typescript@5.8.3
+
+      - name: Capture and verify production-route Art-Net packets
+        run: bash packet-capture/run-tcpdump-e2e.sh packet-capture/results
+
+      - name: Show decoded packet sample
+        run: |
+          echo "=== verifier ==="
+          cat packet-capture/results/verify.json
+          echo
+          echo "=== tcpdump sample ==="
+          head -n 30 packet-capture/results/tcpdump.txt
+
+      - name: Upload PCAP evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: artnet-wire-pcap
+          path: |
+            packet-capture/results/installation-known.pcap
+            packet-capture/results/verify.json
+            packet-capture/results/tcpdump.txt
+            packet-capture/results/router.log
+          if-no-files-found: error
