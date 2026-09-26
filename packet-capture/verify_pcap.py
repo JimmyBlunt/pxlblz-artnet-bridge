@@ -140,6 +140,25 @@ for key,want in required_lengths.items():
 if ("10.0.0.253",138) in samples:
     raise AssertionError("BACK_PANEL U138 unexpectedly emitted")
 
+
+# Deterministic wire payload proof. The tcpdump test drives every logical pixel
+# as RGB=(100,200,50). Verify color-order plus per-route brightness after the
+# router's physical transform, directly from captured ArtDmx bytes.
+expected_first_pixel = {
+    ("10.0.0.244", 0): [140, 70, 35],   # GRB * 0.70
+    ("10.0.0.253", 120): [30, 60, 15],  # RGB * 0.30
+    ("10.0.0.251", 156): [35, 140, 70], # BGR * 0.70
+}
+wire_pixel_proof = {}
+for key, want in expected_first_pixel.items():
+    got = list(samples[key]["data"][:3])
+    if got != want:
+        raise AssertionError(f"{key} first pixel={got} want={want}")
+    wire_pixel_proof[f"{key[0]}:U{key[1]}"] = {
+        "captured": got,
+        "expected": want,
+    }
+
 summary = {
     "pcap": str(pcap_path),
     "captured_artdmx_packets": len(packets),
@@ -158,6 +177,7 @@ summary = {
     "u138_absent": ("10.0.0.253",138) not in samples,
     "all_artdmx_lengths_even": not odd_lengths,
     "unexpected_packets": len(unexpected),
+    "wire_pixel_proof": wire_pixel_proof,
     "status": "PASS",
 }
 out_path.write_text(json.dumps(summary, indent=2) + "\n")
