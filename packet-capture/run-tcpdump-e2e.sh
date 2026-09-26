@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROUTER_ROOT="$ROOT/router"
 OUT_DIR="${1:-$ROOT/packet-capture/results}"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 ROUTER_BIN="$OUT_DIR/pxlblz-router"
 PCAP="$OUT_DIR/installation-known.pcap"
