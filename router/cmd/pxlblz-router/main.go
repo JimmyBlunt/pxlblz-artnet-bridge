@@ -17,7 +17,7 @@ import (
 	"pxlblz-router/internal/wsmini"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 func main() {
 	configPath := flag.String("config", "config/routes.loopback.json", "route configuration JSON")
