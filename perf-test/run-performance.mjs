@@ -205,7 +205,17 @@ const routerBench = run('go', [
   '-benchtime=1s', './internal/router',
 ], { cwd: routerRoot })
 const wsBench = run('go', [
-  'test', '-run', '^fs.writeFileSync(benchPath, benchText)
+  'test', '-run', '^$', '-bench', 'BenchmarkReadFrameIntoReuse98K', '-benchmem',
+  '-benchtime=1s', './internal/wsmini',
+], { cwd: routerRoot })
+const receiverBench = run('go', [
+  'test', '-run', '^$', '-bench', 'BenchmarkBackPanel', '-benchmem',
+  '-benchtime=1s', './internal/virtualcontroller',
+], { cwd: routerRoot })
+const benchText = routerBench.stdout + routerBench.stderr + '\n'
+  + wsBench.stdout + wsBench.stderr + '\n'
+  + receiverBench.stdout + receiverBench.stderr
+fs.writeFileSync(benchPath, benchText)
 process.stdout.write(routerBench.stdout)
 process.stdout.write(wsBench.stdout)
 process.stdout.write(receiverBench.stdout)
