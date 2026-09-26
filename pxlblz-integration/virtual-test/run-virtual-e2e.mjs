@@ -121,4 +121,28 @@ try {
   await stop(router)
 }
 
+try {
+  console.log('=== Virtual E2E C: all known installation controllers in dry-run ===')
+  router = start(routerBin, [
+    '--config', path.join(routerRoot, 'config', 'routes.installation-known.json'),
+    '--input', 'ws', '--dry-run', '--duration', '7s',
+  ], routerRoot)
+  await waitForText(router, 'Waiting for first valid input frame')
+  await wait(250)
+  run(process.execPath, [path.join(here, 'virtual-pxlblz-driver.mjs'), '--pixels', '8186', '--fps', '60', '--seconds', '5'], { stdio: 'inherit' })
+  await new Promise(resolve => router.child.once('exit', resolve))
+
+  if (!/invalid 0\/s/.test(router.stdout)) throw new Error('Known-installation dry-run reported invalid websocket frames')
+  if (!/TX\s+30\.0 fps\s+1320 pkt\/s/.test(router.stdout)) throw new Error('Known-installation routing did not sustain expected 30 FPS / 1320 pkt/s')
+  if (!/Final RX: \d+ valid frames, \d+ replaced before output observation, 0 invalid/.test(router.stdout)) {
+    throw new Error('Known-installation final RX validation failed')
+  }
+  for (const required of ['10.0.0.244', '10.0.0.253', '10.0.0.251', 'GRB', 'RGB', 'BGR']) {
+    if (!router.stdout.includes(required)) throw new Error(`Known-installation route summary missing ${required}`)
+  }
+  console.log('VIRTUAL_E2E_C_PASS pixels=8186 known_controllers=3 universes_per_frame=44 tx_fps=30 packets_per_second=1320 invalid=0')
+} finally {
+  await stop(router)
+}
+
 console.log('ALL_VIRTUAL_TESTS_PASS')
