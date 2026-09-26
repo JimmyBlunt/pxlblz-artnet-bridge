@@ -1,6 +1,7 @@
 package virtualcontroller
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -211,5 +212,40 @@ func TestSequenceStateResetsAfterOneSecondWithoutAcceptedPacket(t *testing.T) {
 	s := c.Snapshot(start.Add(1001*time.Millisecond))
 	if s.SequenceMode != "unknown" || s.Sequence != -1 {
 		t.Fatalf("sequence state not reset: %+v", s)
+	}
+}
+
+
+func Test512ByteTailPayloadAccepted(t *testing.T) {
+	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
+	buf := make([]byte, artnet.HeaderSize+512)
+	copy(buf[:8], []byte("Art-Net\x00"))
+	binary.LittleEndian.PutUint16(buf[8:10], artnet.OpDmx)
+	binary.BigEndian.PutUint16(buf[10:12], artnet.ProtocolVersion)
+	buf[12] = 31
+	binary.LittleEndian.PutUint16(buf[14:16], 121)
+	binary.BigEndian.PutUint16(buf[16:18], 512)
+	for i := 18; i < len(buf); i++ { buf[i] = byte(i) }
+
+	start := time.Unix(30,0)
+	c.IngestPacket(buf, start)
+	s := c.Snapshot(start)
+	if s.Counters.Accepted != 1 || s.Counters.Rejected != 0 || s.CandidateReceived != 1 {
+		t.Fatalf("snapshot=%+v", s)
+	}
+}
+
+func TestArtSyncRejectedAndPacketCounted(t *testing.T) {
+	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
+	pkt := make([]byte, artnet.HeaderSize+2)
+	copy(pkt[:8], []byte("Art-Net\x00"))
+	binary.LittleEndian.PutUint16(pkt[8:10], 0x5200)
+	binary.BigEndian.PutUint16(pkt[10:12], artnet.ProtocolVersion)
+	binary.BigEndian.PutUint16(pkt[16:18], 2)
+	now := time.Unix(31,0)
+	c.IngestPacket(pkt, now)
+	s := c.Snapshot(now)
+	if s.Counters.Packets != 1 || s.Counters.Rejected != 1 || s.Counters.Accepted != 0 {
+		t.Fatalf("counters=%+v", s.Counters)
 	}
 }
