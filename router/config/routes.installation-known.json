@@ -9,19 +9,137 @@
     "unicast": true
   },
   "routes": [
-    {"name":"WS2812_NODE_P1","enabled":true,"target_ip":"10.0.0.244","physical_port":1,"pixel_start":0,"pixel_count":517,"universe_start":0,"color_order":"GRB"},
-    {"name":"WS2812_NODE_P2","enabled":true,"target_ip":"10.0.0.244","physical_port":2,"pixel_start":517,"pixel_count":269,"universe_start":6,"color_order":"GRB"},
-    {"name":"WS2812_NODE_P3","enabled":true,"target_ip":"10.0.0.244","physical_port":3,"pixel_start":786,"pixel_count":398,"universe_start":12,"color_order":"GRB"},
-
-    {"name":"BACK_PANEL_249_P1","enabled":true,"target_ip":"10.0.0.253","physical_port":1,"pixel_start":1440,"pixel_count":203,"universe_start":120,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P2","enabled":true,"target_ip":"10.0.0.253","physical_port":2,"pixel_start":3744,"pixel_count":738,"universe_start":122,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P3","enabled":true,"target_ip":"10.0.0.253","physical_port":3,"pixel_start":4482,"pixel_count":880,"universe_start":127,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P4","enabled":true,"target_ip":"10.0.0.253","physical_port":4,"pixel_start":5362,"pixel_count":810,"universe_start":133,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P5","enabled":true,"target_ip":"10.0.0.253","physical_port":5,"pixel_start":6172,"pixel_count":352,"universe_start":139,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P6","enabled":true,"target_ip":"10.0.0.253","physical_port":6,"pixel_start":6524,"pixel_count":610,"universe_start":142,"color_order":"RGB"},
-    {"name":"BACK_PANEL_249_P7","enabled":true,"target_ip":"10.0.0.253","physical_port":7,"pixel_start":7134,"pixel_count":512,"universe_start":146,"color_order":"RGB"},
-
-    {"name":"PANEL8_251_P1","enabled":true,"target_ip":"10.0.0.251","physical_port":1,"pixel_start":2720,"pixel_count":256,"universe_start":156,"color_order":"BGR"},
-    {"name":"PANEL8_251_P2","enabled":true,"target_ip":"10.0.0.251","physical_port":2,"pixel_start":7646,"pixel_count":540,"universe_start":158,"color_order":"BGR"}
+    {
+      "name": "WS2812_NODE_P1",
+      "enabled": true,
+      "target_ip": "10.0.0.244",
+      "physical_port": 1,
+      "pixel_start": 0,
+      "pixel_count": 517,
+      "universe_start": 0,
+      "color_order": "GRB",
+      "brightness": 0.7
+    },
+    {
+      "name": "WS2812_NODE_P2",
+      "enabled": true,
+      "target_ip": "10.0.0.244",
+      "physical_port": 2,
+      "pixel_start": 517,
+      "pixel_count": 269,
+      "universe_start": 6,
+      "color_order": "GRB",
+      "brightness": 0.7
+    },
+    {
+      "name": "WS2812_NODE_P3",
+      "enabled": true,
+      "target_ip": "10.0.0.244",
+      "physical_port": 3,
+      "pixel_start": 786,
+      "pixel_count": 398,
+      "universe_start": 12,
+      "color_order": "GRB",
+      "brightness": 0.7
+    },
+    {
+      "name": "BACK_PANEL_249_P1",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 1,
+      "pixel_start": 1440,
+      "pixel_count": 203,
+      "universe_start": 120,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P2",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 2,
+      "pixel_start": 3744,
+      "pixel_count": 738,
+      "universe_start": 122,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P3",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 3,
+      "pixel_start": 4482,
+      "pixel_count": 880,
+      "universe_start": 127,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P4",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 4,
+      "pixel_start": 5362,
+      "pixel_count": 810,
+      "universe_start": 133,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P5",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 5,
+      "pixel_start": 6172,
+      "pixel_count": 352,
+      "universe_start": 139,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P6",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 6,
+      "pixel_start": 6524,
+      "pixel_count": 610,
+      "universe_start": 142,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "BACK_PANEL_249_P7",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 7,
+      "pixel_start": 7134,
+      "pixel_count": 512,
+      "universe_start": 146,
+      "color_order": "RGB",
+      "brightness": 0.3
+    },
+    {
+      "name": "PANEL8_251_P1",
+      "enabled": true,
+      "target_ip": "10.0.0.251",
+      "physical_port": 1,
+      "pixel_start": 2720,
+      "pixel_count": 256,
+      "universe_start": 156,
+      "color_order": "BGR",
+      "brightness": 0.7
+    },
+    {
+      "name": "PANEL8_251_P2",
+      "enabled": true,
+      "target_ip": "10.0.0.251",
+      "physical_port": 2,
+      "pixel_start": 7646,
+      "pixel_count": 540,
+      "universe_start": 158,
+      "color_order": "BGR",
+      "brightness": 0.7
+    }
   ]
 }
