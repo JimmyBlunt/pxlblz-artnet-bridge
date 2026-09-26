@@ -97,7 +97,9 @@ if ($text.Contains($cleanupAnchor)) {
   )
 }
 
-Set-Content -Path $preview -Value $text -Encoding utf8
+$text = $text.TrimEnd("`r", "`n") + "`r`n"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($preview, $text, $utf8NoBom)
 
 Write-Host ""
 Write-Host "PXLBLZ external pixel output installed."
