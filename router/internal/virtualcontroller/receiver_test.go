@@ -59,6 +59,22 @@ func sendComplete(t *testing.T, c *Controller, seq byte, start time.Time) time.T
 	return now
 }
 
+func bootToRunning(t *testing.T, c *Controller, start time.Time) time.Time {
+	t.Helper()
+	c.Tick(start)
+	s := c.Snapshot(start)
+	if s.State != "WAIT_BLACKOUT_COMPLETION" || s.Counters.Blackouts != 1 || s.Counters.FramesSubmitted != 1 {
+		t.Fatalf("initial blackout submit=%+v", s)
+	}
+	ready := start.Add(26700 * time.Microsecond)
+	c.Tick(ready)
+	s = c.Snapshot(ready)
+	if s.State != "ARTNET_RUNNING" || !s.BlackLatched || s.Counters.DMACompleted != 1 || !s.ArtNetWaiting {
+		t.Fatalf("initial blackout completion=%+v", s)
+	}
+	return ready
+}
+
 func TestExactBackPanelCompleteFrame(t *testing.T) {
 	c, err := New(backPanelConfig(), "10.0.0.253", Options{})
 	if err != nil { t.Fatal(err) }
@@ -183,24 +199,39 @@ func TestStaleSequenceIgnored(t *testing.T) {
 func TestRunPolicyDMAAndBlackout(t *testing.T) {
 	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
 	start := time.Unix(10,0)
-	now := sendComplete(t,c,20,start)
-	c.Tick(now)
-	s := c.Snapshot(now)
-	if s.Counters.FramesSubmitted != 1 || !s.DMABusy || s.WireGuardUS != 26700 {
-		t.Fatalf("after render=%+v", s)
+	runningAt := bootToRunning(t, c, start)
+
+	// A complete frame may arrive immediately, but the physical submit is gated
+	// by the 30 FPS frame period measured from the initial blackout submit.
+	now := sendComplete(t,c,20,runningAt.Add(time.Millisecond))
+	due := start.Add(33334 * time.Microsecond)
+	if now.After(due) { due = now }
+	c.Tick(due)
+	s := c.Snapshot(due)
+	if s.Counters.FramesSubmitted != 2 || !s.DMABusy || s.WireGuardUS != 26700 || s.Counters.Blackouts != 1 {
+		t.Fatalf("after live render=%+v", s)
 	}
-	c.Tick(now.Add(26699*time.Microsecond))
-	if c.Snapshot(now.Add(26699*time.Microsecond)).Counters.DMACompleted != 0 {
-		t.Fatal("DMA completed before wire guard")
+	c.Tick(due.Add(26699*time.Microsecond))
+	if c.Snapshot(due.Add(26699*time.Microsecond)).Counters.DMACompleted != 1 {
+		t.Fatal("live DMA completed before wire guard")
 	}
-	c.Tick(now.Add(26700*time.Microsecond))
-	if c.Snapshot(now.Add(26700*time.Microsecond)).Counters.DMACompleted != 1 {
-		t.Fatal("DMA completion not observed at guard")
+	c.Tick(due.Add(26700*time.Microsecond))
+	if c.Snapshot(due.Add(26700*time.Microsecond)).Counters.DMACompleted != 2 {
+		t.Fatal("live DMA completion not observed at guard")
 	}
-	c.Tick(start.Add(1100*time.Millisecond))
-	s = c.Snapshot(start.Add(1100*time.Millisecond))
-	if s.Counters.Blackouts != 1 || !s.BlackLatched {
-		t.Fatalf("blackout=%+v", s)
+
+	// Once the stream was playing, >1 s without a complete frame requests a
+	// second blackout and clears receiver ownership state.
+	lossAt := due.Add(1100*time.Millisecond)
+	c.Tick(lossAt)
+	s = c.Snapshot(lossAt)
+	if s.State != "WAIT_BLACKOUT_COMPLETION" || s.Counters.Blackouts != 2 || s.Counters.FramesSubmitted != 3 || s.BlackLatched {
+		t.Fatalf("loss blackout submit=%+v", s)
+	}
+	c.Tick(lossAt.Add(26700*time.Microsecond))
+	s = c.Snapshot(lossAt.Add(26700*time.Microsecond))
+	if s.State != "ARTNET_RUNNING" || !s.BlackLatched || !s.ArtNetWaiting || s.Counters.DMACompleted != 3 {
+		t.Fatalf("loss blackout completion=%+v", s)
 	}
 }
 
@@ -247,5 +278,52 @@ func TestArtSyncRejectedAndPacketCounted(t *testing.T) {
 	s := c.Snapshot(now)
 	if s.Counters.Packets != 1 || s.Counters.Rejected != 1 || s.Counters.Accepted != 0 {
 		t.Fatalf("counters=%+v", s.Counters)
+	}
+}
+
+
+func TestProtocolVersionBelow14Rejected(t *testing.T) {
+	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
+	p := dmxPacket(t, 120, 1, 510)
+	p[10], p[11] = 0, 13
+	now := time.Unix(40,0)
+	c.IngestPacket(p, now)
+	s := c.Snapshot(now)
+	if s.Counters.Packets != 1 || s.Counters.Rejected != 1 || s.Counters.Accepted != 0 {
+		t.Fatalf("counters=%+v", s.Counters)
+	}
+}
+
+func TestPortAddressHighBitRejected(t *testing.T) {
+	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
+	p := dmxPacket(t, 120, 1, 510)
+	p[15] |= 0x80
+	now := time.Unix(41,0)
+	c.IngestPacket(p, now)
+	s := c.Snapshot(now)
+	if s.Counters.Rejected != 1 || s.Counters.Ignored != 0 {
+		t.Fatalf("counters=%+v", s.Counters)
+	}
+}
+
+func TestRejectedAndIgnoredPacketsDoNotRunExpire(t *testing.T) {
+	c, _ := New(backPanelConfig(), "10.0.0.253", Options{})
+	start := time.Unix(42,0)
+	c.IngestPacket(dmxPacket(t,120,55,510), start)
+
+	// A valid but unused universe arrives well after the 100 ms partial timeout.
+	// runtime_receiver.h returns from the ignored branch before expire(now).
+	c.IngestPacket(dmxPacket(t,138,55,510), start.Add(200*time.Millisecond))
+	s := c.Snapshot(start.Add(50*time.Millisecond))
+	if s.Counters.Ignored != 1 || s.Counters.Incomplete != 0 {
+		t.Fatalf("ignored packet unexpectedly expired candidate: %+v", s.Counters)
+	}
+
+	// Explicit Tick mirrors the firmware main-loop receiver.expire(now) and must
+	// now abandon the old partial candidate exactly once.
+	c.Tick(start.Add(200*time.Millisecond))
+	s = c.Snapshot(start.Add(200*time.Millisecond))
+	if s.Counters.Incomplete != 1 {
+		t.Fatalf("incomplete=%d want 1", s.Counters.Incomplete)
 	}
 }
