@@ -206,7 +206,7 @@ try {
     throw new Error(`Virtual Teensy run policy did not submit/complete enough frames: ${JSON.stringify(counters)}`)
   }
   if (summary.wire_guard_us !== 26700) throw new Error(`Virtual Teensy wire guard ${summary.wire_guard_us} != 26700 us`)
-  if (counters.blackouts !== 1) throw new Error(`Virtual Teensy expected one post-stream blackout, got ${counters.blackouts}`)
+  if (counters.blackouts !== 2) throw new Error(`Virtual Teensy expected startup + post-stream blackouts, got ${counters.blackouts}`)
   console.log(
     `VIRTUAL_E2E_D_PASS complete=${counters.complete} submitted=${counters.frames_submitted} dma=${counters.dma_completed}`
     + ` rejected=${counters.rejected} ignored=${counters.ignored} incomplete=${counters.incomplete}`
@@ -239,6 +239,9 @@ for (let i = 0; i < faultCases.length; i++) {
     '--summary-json', summaryPath,
   ], routerRoot)
   await waitForText(virtualController, 'Receiver model: Teensy runtime_receiver / artnet_run_policy compatible')
+  // Let the emulated controller complete the same initial black DMA handoff
+  // performed by controller::start() before fault packets arrive.
+  await wait(60)
   run(receiverProbeBin, [
     '--config', path.join(routerRoot, 'config', 'routes.backpanel-all.json'),
     '--profile-ip', '10.0.0.253',
