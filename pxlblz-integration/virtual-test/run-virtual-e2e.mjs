@@ -122,27 +122,41 @@ try {
 }
 
 try {
-  console.log('=== Virtual E2E C: all known installation controllers in dry-run ===')
+  console.log('=== Virtual E2E C: all known installation controllers -> real loopback UDP ===')
+  const knownConfig = JSON.parse(fs.readFileSync(path.join(routerRoot, 'config', 'routes.installation-known.json'), 'utf8'))
+  for (const route of knownConfig.routes) route.target_ip = '127.0.0.1'
+  const knownLoopbackConfig = path.join(tmpDir, 'routes.installation-known.loopback.json')
+  fs.writeFileSync(knownLoopbackConfig, JSON.stringify(knownConfig, null, 2) + '\n')
+
+  listener = start(listenerBin, ['--bind', '127.0.0.1:6454'], routerRoot)
+  await waitForText(listener, 'Art-Net listener on')
   router = start(routerBin, [
-    '--config', path.join(routerRoot, 'config', 'routes.installation-known.json'),
-    '--input', 'ws', '--dry-run', '--duration', '7s',
+    '--config', knownLoopbackConfig,
+    '--input', 'ws', '--duration', '7s',
   ], routerRoot)
   await waitForText(router, 'Waiting for first valid input frame')
   await wait(250)
   run(process.execPath, [path.join(here, 'virtual-pxlblz-driver.mjs'), '--pixels', '8186', '--fps', '60', '--seconds', '5'], { stdio: 'inherit' })
   await new Promise(resolve => router.child.once('exit', resolve))
 
-  if (!/invalid 0\/s/.test(router.stdout)) throw new Error('Known-installation dry-run reported invalid websocket frames')
+  if (!/invalid 0\/s/.test(router.stdout)) throw new Error('Known-installation loopback reported invalid websocket frames')
   if (!/TX\s+30\.0 fps\s+1320 pkt\/s/.test(router.stdout)) throw new Error('Known-installation routing did not sustain expected 30 FPS / 1320 pkt/s')
   if (!/Final RX: \d+ valid frames, \d+ replaced before output observation, 0 invalid/.test(router.stdout)) {
     throw new Error('Known-installation final RX validation failed')
   }
-  for (const required of ['10.0.0.244', '10.0.0.253', '10.0.0.251', 'GRB', 'RGB', 'BGR']) {
-    if (!router.stdout.includes(required)) throw new Error(`Known-installation route summary missing ${required}`)
+  for (const required of ['GRB', 'RGB', 'BGR']) {
+    if (!router.stdout.includes(required)) throw new Error(`Known-installation route summary missing color order ${required}`)
   }
-  console.log('VIRTUAL_E2E_C_PASS pixels=8186 known_controllers=3 universes_per_frame=44 tx_fps=30 packets_per_second=1320 invalid=0')
+  for (const universe of [0, 3, 6, 7, 12, 14, 120, 149, 156, 161]) {
+    if (!new RegExp(`U${universe}:\\d+`).test(listener.stdout)) {
+      throw new Error(`Known-installation listener did not observe universe U${universe}`)
+    }
+  }
+  if (/invalid [1-9]\d*/.test(listener.stdout)) throw new Error('Known-installation listener reported invalid Art-Net packets')
+  console.log('VIRTUAL_E2E_C_PASS pixels=8186 known_controllers=3 universes_per_frame=44 tx_fps=30 packets_per_second=1320 udp_loopback=true invalid=0')
 } finally {
   await stop(router)
+  await stop(listener)
 }
 
 console.log('ALL_VIRTUAL_TESTS_PASS')
