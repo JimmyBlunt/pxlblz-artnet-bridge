@@ -29,8 +29,9 @@
 //   Wellenlaenge          duration of the bright wave, 0.4x .. 1.6x
 //   Wellental Laenge      quiet time between two waves, 0 .. 40 time units
 //   Wellental Schwingen   strength of the glimmer inside the trough (0 = off)
-//   Glimmen Ausklang      how slowly the glimmer fades out over the trough
-//                         (0 = gone after the first quarter, 1 = whole trough)
+//   Glimmen Ausklang      how long the LEDs take to dim down to almost 0 in the
+//                         trough (0 = after 10 % of the trough, 1 = at its end);
+//                         they come back softly with the next entry
 //   Glimmen Kontrast      brightness difference of the glimmer
 //                         (0 = steady glow, 1 = full bright/dark pulsing)
 //   Wabber Form           shape of the trough wobble, blended continuously:
@@ -108,6 +109,9 @@ var wMaxY = -9999
 var curSpatial = 0
 // brightness swell of the trough for the current pixel (set by troughSwing)
 var troughLift = 0
+// trough dimming factor for the current pixel (set by envelope), 1 = no dimming
+var troughDim = 1
+var TROUGH_FLOOR = 0.04   // 'almost 0'
 
 function fract(v) { return v - floor(v) }
 function clamp01(v) { return max(0, min(1, v)) }
@@ -193,6 +197,11 @@ function wobbleForm(k,u,cycle,index) {
 // Glimmer between tail end (a) and entry start (b): a short soft rise, then a
 // slow fade to exactly zero - it always ends dark before the next entry, so
 // the trough never creates a step at either end.
+// Glimmen Ausklang: share of the trough after which the LEDs reach the floor
+function fadeEnd() { return 0.1 + 0.9*glimmenAusklang }
+// A very short trough dims less deep, so tail -> trough -> entry never steps.
+function troughDepth(len) { return (1 - TROUGH_FLOOR)*smooth01(len/3) }
+
 function troughSwing(q,a,b,cycle,index) {
   if (wellentalSchwingen <= 0 || b - a < 0.5) return 0
   var u = clamp01((q-a)/(b-a))
@@ -308,17 +317,23 @@ function waterTail(q,cycle,index,slot) {
 }
 
 function envelope(q,cycle,index,slot,cycleLen) {
-  var entryStart = cycleLen - entrySpanQ()
-  if (q >= entryStart) return entryEnvelope(q,index,cycleLen)
-
   var k = crestScale()
   var hold = peakHold(cycle)*k
-  if (q < hold) return livingPeak(q/hold,cycle,index)
-
   var endQ = hold + tailSpan(slot,cycle)*k
+  var entryStart = cycleLen - entrySpanQ()
+  var depth = troughDepth(entryStart - endQ)
+
+  if (q >= entryStart) {
+    // come back from the dimmed trough together with the entry rise
+    troughDim = 1 - depth*(1 - smoother01((q-entryStart)/entrySpanQ()))
+    return entryEnvelope(q,index,cycleLen)
+  }
+  if (q < hold) return livingPeak(q/hold,cycle,index)
   if (q < endQ) return waterTail(q/k,cycle,index,slot)
 
-  // quiet trough; optional smooth swing
+  // trough: dim all LEDs down towards the floor, optional glimmer on top
+  var u = clamp01((q-endQ)/(entryStart-endQ))
+  troughDim = 1 - depth*smoother01(u/fadeEnd())
   return troughSwing(q,endQ,entryStart,cycle,index)
 }
 
@@ -412,12 +427,13 @@ export function render2D(index,x,y) {
   // Abdeckung: only this share of pixels is reached by the wave
   var env = 0
   troughLift = 0
+  troughDim = 1
   if (hash2(index,305) < abdeckung) env = envelope(qLocal,cycle,index,slot,cycleLen)
 
   var hardMix = smoother01((env-0.18)/0.58)
   var rnd = softRnd + (hardRnd-softRnd)*hardMix
 
   var v = clamp01(base + troughLift + rnd*env)*layerGain*densityGain
-  v = pow(v,2.45)*helligkeit
+  v = pow(v,2.45)*helligkeit*troughDim
   hsv(hue,saturation,v)
 }
