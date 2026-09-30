@@ -317,3 +317,19 @@ Reading: over the phone hotspot ~0.8 % of packets are lost in transit; complete 
 that arrive bunched inside one output period supersede each other, so LEDs show ~56 fps
 for 60 sent. Router-side output is exact; the remaining gap is the Wi-Fi link.
 Next: repeat on a proper AP / wired link for a representative number.
+
+### H-ESP3 — PXLBLZ → router → ESP end to end, real test rig, 2026-10-01
+
+Rig: ONE APA102 chain on ESP out6 = 8x8 matrix + DotStar FeatherWing 12x6 = 136 px (U149).
+ESP set to out6 = 136 px, out0 disabled (applied + saved via its /api/config; backup of
+the previous config in the handoff folder `esp-config-backup/`). Router config
+`routes.esp-test-172-8x8-12x6.json`, PXLBLZ IDE (local, d685125b + output adapter,
+desktop starter `windows-launcher-artnet`) with map `maps/esp-test-8x8-12x6.js`.
+
+```text
+PXLBLZ -> router: 1 WebSocket client, ~60 fps, 0 invalid frames (variable_size)
+router -> ESP, 5 s: 302 packets -> 302 complete frames, 0 incomplete; LED output ~56 fps
+```
+
+Root cause of the "last LEDs dark" symptom: out6 was configured for 127 px while the
+chain has 136 (the last 9 FeatherWing LEDs were never driven).
