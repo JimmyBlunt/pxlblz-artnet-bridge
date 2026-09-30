@@ -267,3 +267,31 @@ sequence gap, duplicate or late packet; no heap growth, no goroutine leak, no FP
 Isolated frame-interval maxima (40–86 ms, i.e. a few frames late, never lost) are OS
 scheduling hiccups on a non-realtime laptop; p99 stays within 12 % of the period.
 Software side of v0.3 is done; remaining gate is hardware V1–V4.
+
+## H-ESP1 — first real-hardware throughput ramp, ESP32 test controller, 2026-10-01
+
+Controller `esp32-wroom-flex-8ws-2apa` at 172.20.10.2, **Wi-Fi via phone hotspot**
+(PC also on the hotspot, ping 9–34 ms). Running config: out0 WS2812B 203 px U120–U121,
+out6 APA102 127 px U149 (4 MHz SPI), controller `targetFps` 30, output 8.3 ms/frame.
+Router v0.3 (ec37979), `config/routes.esp-test-172.json`, 3 universes/frame.
+Counters from the controller's `GET /api/status`, diffed around each step
+(`perf-test/hardware-ramp.mjs`, 20 s per step, pattern rainbow).
+
+T2 port-id 30 fps, 10 s: sent 299 frames / 897 packets → received 299 complete / 897 packets.
+
+```text
+fps  sent  rx complete        rx packets   incompl  dropped  seqErr  LED out frames
+ 30   600   600 (100.00 %)    1800/1800         0        0       0   590
+ 45   900   898  (99.78 %)    2696/2700         1        0       0   594
+ 60  1199  1193  (99.50 %)    3580/3597         1        0       0   597
+ 90  1799  1752  (97.39 %)    5291/5397        20        0       0   597
+120  2399  2276  (94.87 %)    6896/7197        45        0       0   597
+router: exact FPS every step, send avg 0.20–0.30 ms, 0 send errors
+```
+
+Reading:
+- Losses are packets that never reached the controller (Wi-Fi/hotspot), not router or
+  firmware drops (controller droppedPackets/sequenceErrors stay 0).
+- LED output stays at ~30 FPS in every step: the firmware's `targetFps` 30 caps physical
+  output; faster complete frames are accepted and superseded.
+- Wi-Fi hotspot is not representative of the wired installation controllers.
