@@ -333,3 +333,10 @@ router -> ESP, 5 s: 302 packets -> 302 complete frames, 0 incomplete; LED output
 
 Root cause of the "last LEDs dark" symptom: out6 was configured for 127 px while the
 chain has 136 (the last 9 FeatherWing LEDs were never driven).
+
+### H-ESP4 — ported pattern on the test rig, 2026-10-01
+
+Map (flipY on both boards) and `patterns/snowflake-icesparkle-carpet-v06-esp-test.js`
+imported into the local PXLBLZ D1 (backup of `.wrangler/state` taken first). User
+confirmation on the LEDs: all 136 LEDs lit, blue variant marker bottom-left on the 8x8.
+Open: 8x8 serpentine of the upper rows (assumed).

@@ -8,8 +8,9 @@ function (pixelCount) {
   // Physical layout: the FeatherWing sits ABOVE the 8x8 matrix, matrix centered.
   // Units = one LED position per board (the boards have different pitches).
   // Verified on the rig 2026-10-01: both boards start at the BOTTOM (flipY),
-  // FeatherWing rows run left->right without serpentine. 8x8 serpentine/x
-  // direction not yet verified.
+  // FeatherWing rows run left->right without serpentine. 8x8: bottom row
+  // left->right confirmed (variant markers bottom-left); serpentine for the
+  // upper rows is assumed (only visible as a row-wise offset of the wave).
   // FeatherWing wiring was first assumed from Adafruit's DotStarMatrix example
   // (TOP + LEFT + ROWS + PROGRESSIVE). If a test pattern shows mirrored rows
   // or columns, flip the switches below; nothing else has to change.
