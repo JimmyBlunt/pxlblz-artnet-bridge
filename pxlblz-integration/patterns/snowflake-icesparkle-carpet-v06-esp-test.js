@@ -23,6 +23,9 @@
 //   Helligkeit            overall brightness
 //   Abdeckung             share of pixels the wave reaches (others keep only the
 //                         quiet base glitter), 0..100 %
+//   Density               share of ALL LEDs that light at all (glitter, wave and
+//                         trough); the rest stay off. Fixed per-LED rank, soft
+//                         fade while moving the slider. Markers stay visible.
 //   Wellenlaenge          duration of the bright wave, 0.4x .. 1.6x
 //   Wellental Laenge      quiet time between two waves, 0 .. 40 time units
 //   Wellental Schwingen   gentle swell inside the trough, faded in and out
@@ -50,12 +53,14 @@ export var abdeckung = 1
 export var wellenlaenge = 0.5        // 0.5 -> 1.0x (v0.6 wave length)
 export var wellentalLaenge = 0.35    // 0.35 -> 14 time units of quiet
 export var wellentalSchwingen = 0
+export var density = 1
 
 export function sliderHelligkeit(v) { helligkeit = v }
 export function sliderAbdeckung(v) { abdeckung = v }
 export function sliderWellenlaenge(v) { wellenlaenge = v }
 export function sliderWellentalLaenge(v) { wellentalLaenge = v }
 export function sliderWellentalSchwingen(v) { wellentalSchwingen = v }
+export function sliderDensity(v) { density = v }
 
 // continuous wave clock in time units (v0.6: 56 units per 9.6 s of t)
 var qPos = 0
@@ -339,6 +344,11 @@ export function render2D(index,x,y) {
   }
   if (layerGain <= 0) { hsv(0,0,0); return }
 
+  // Density: fixed per-LED rank, 5 % soft band so moving the slider fades LEDs
+  // in/out one after another instead of switching them hard.
+  var densityGain = smooth01((density*1.05 - hash2(index,311))/0.05)
+  if (densityGain <= 0) { hsv(0,0,0); return }
+
   // Gold-reference micro glitter core.
   var basePeriod = 12.8 + 6.4*hash2(index,11)
   var basePhase = t/basePeriod + hash2(index,12)
@@ -370,7 +380,7 @@ export function render2D(index,x,y) {
   var hardMix = smoother01((env-0.18)/0.58)
   var rnd = softRnd + (hardRnd-softRnd)*hardMix
 
-  var v = clamp01(base + troughLift + rnd*env)*layerGain
+  var v = clamp01(base + troughLift + rnd*env)*layerGain*densityGain
   v = pow(v,2.45)*helligkeit
   hsv(hue,saturation,v)
 }
