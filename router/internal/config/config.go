@@ -32,6 +32,10 @@ type InputConfig struct {
 	// OnStale: "hold" (default, keep sending the last frame), "blackout"
 	// (send all-black frames) or "stop" (stop transmitting until input resumes).
 	OnStale string `json:"on_stale,omitempty"`
+	// VariableSize accepts WebSocket frames of any whole-pixel length (as the
+	// Fadecandy bridge does): the first PixelCount pixels are used, missing
+	// pixels are black. Default false keeps the exact-size check.
+	VariableSize bool `json:"variable_size,omitempty"`
 }
 
 type ArtNet struct {

@@ -10,6 +10,7 @@ import (
 type LatestFrame struct {
 	mu       sync.Mutex
 	buf      []byte
+	variable bool
 	have     bool
 	gen      uint64
 	consumed uint64
@@ -36,10 +37,20 @@ func NewLatestFrame(size int) (*LatestFrame, error) {
 
 func (l *LatestFrame) Size() int { return len(l.buf) }
 
+// AcceptVariableSize makes Submit take any whole-pixel frame length: the first
+// Size() bytes are used and a shorter frame clears the rest, so unused LEDs do
+// not keep colors from a previous, longer frame. Call before input starts.
+func (l *LatestFrame) AcceptVariableSize() { l.variable = true }
+
 func (l *LatestFrame) Reject() { l.invalid.Add(1) }
 
 func (l *LatestFrame) Submit(frame []byte) error {
-	if len(frame) != len(l.buf) {
+	if l.variable {
+		if len(frame) == 0 || len(frame)%3 != 0 {
+			l.invalid.Add(1)
+			return fmt.Errorf("frame length %d must contain complete RGB pixels", len(frame))
+		}
+	} else if len(frame) != len(l.buf) {
 		l.invalid.Add(1)
 		return fmt.Errorf("frame length %d, expected %d", len(frame), len(l.buf))
 	}
@@ -47,7 +58,8 @@ func (l *LatestFrame) Submit(frame []byte) error {
 	if l.have && l.gen != l.consumed {
 		l.replaced.Add(1)
 	}
-	copy(l.buf, frame)
+	n := copy(l.buf, frame)
+	clear(l.buf[n:])
 	l.gen++
 	l.have = true
 	l.mu.Unlock()

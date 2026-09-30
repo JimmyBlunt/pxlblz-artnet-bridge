@@ -116,14 +116,23 @@ func main() {
 	var wsServer *wsmini.Server
 	switch mode {
 	case "ws":
-		wsServer, err = wsmini.NewServer(*wsListen, *wsPath, frameSize, func(p []byte) {
+		maxPayload := frameSize
+		if cfg.Input.VariableSize {
+			latest.AcceptVariableSize()
+			maxPayload = max(frameSize, variableSizeMaxPayload)
+		}
+		wsServer, err = wsmini.NewServer(*wsListen, *wsPath, maxPayload, func(p []byte) {
 			_ = latest.Submit(p)
 		})
 		fatalIf(err)
 		actual, err := wsServer.Start()
 		fatalIf(err)
 		defer wsServer.Close()
-		fmt.Printf("Pixel input listening: ws://%s%s (binary frame = exactly %d RGB bytes)\n", actual, *wsPath, frameSize)
+		if cfg.Input.VariableSize {
+			fmt.Printf("Pixel input listening: ws://%s%s (binary frame = any whole RGB pixel count; first %d pixels used, missing pixels black)\n", actual, *wsPath, cfg.Input.PixelCount)
+		} else {
+			fmt.Printf("Pixel input listening: ws://%s%s (binary frame = exactly %d RGB bytes)\n", actual, *wsPath, frameSize)
+		}
 		fmt.Println("Waiting for first valid input frame before Art-Net transmission starts...")
 	case "pattern":
 		genFPS := cfg.Input.FPSTarget
@@ -222,6 +231,10 @@ func main() {
 		}
 	}
 }
+
+// variableSizeMaxPayload bounds WebSocket frames with input.variable_size
+// (~350k RGB pixels), so a larger PXLBLZ map than the router config still fits.
+const variableSizeMaxPayload = 1 << 20
 
 func activeRoutes(cfg cfgpkg.Config, r *router.Router) []cfgpkg.Route {
 	on := map[string]bool{}
