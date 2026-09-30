@@ -343,3 +343,4 @@ Open: 8x8 serpentine of the upper rows (assumed).
 Update: router chase test (`--pattern chase --fps 4`) on the rig — 8x8 rows run left->right
 without serpentine (user observation "B"). Map changed to `MATRIX.serpentine: false`; the
 local PXLBLZ map row was re-baked accordingly. Rig wiring is now fully verified.
+User confirmation after reload: the diagonal wave runs cleanly across both boards. Test rig done.
