@@ -7,11 +7,14 @@ function (pixelCount) {
   //
   // Physical layout: the FeatherWing sits ABOVE the 8x8 matrix, matrix centered.
   // Units = one LED position per board (the boards have different pitches).
-  // FeatherWing wiring follows Adafruit's DotStarMatrix example
+  // Verified on the rig 2026-10-01: both boards start at the BOTTOM (flipY),
+  // FeatherWing rows run left->right without serpentine. 8x8 serpentine/x
+  // direction not yet verified.
+  // FeatherWing wiring was first assumed from Adafruit's DotStarMatrix example
   // (TOP + LEFT + ROWS + PROGRESSIVE). If a test pattern shows mirrored rows
   // or columns, flip the switches below; nothing else has to change.
-  var MATRIX = { w: 8, h: 8, x0: 2, y0: 7, serpentine: true, flipX: false, flipY: false }
-  var FEATHERWING = { w: 12, h: 6, x0: 0, y0: 0, serpentine: false, flipX: false, flipY: false }
+  var MATRIX = { w: 8, h: 8, x0: 2, y0: 7, serpentine: true, flipX: false, flipY: true }
+  var FEATHERWING = { w: 12, h: 6, x0: 0, y0: 0, serpentine: false, flipX: false, flipY: true }
 
   function grid(g) {
     var pts = []
