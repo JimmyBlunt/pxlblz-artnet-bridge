@@ -1,17 +1,15 @@
 function (pixelCount) {
-  // PXLBLZ custom map for the ESP32 test controller (172.20.10.2).
-  // Paste into PXLBLZ: Maps -> new custom map -> source. 2D, 136 pixels.
+  // Pixelblaze / PXLBLZ 2D mapping for the ESP32 test rig (172.20.10.2).
+  // Works as a Pixelblaze mapper function and as a PXLBLZ custom-map source.
   //
-  // Pixel order = order sent to the Art-Net router
-  // (router/config/routes.esp-test-172-8x8-12x6.json):
-  //   0..63    8x8 WS2812B matrix                    ESP out0 -> U120
-  //   64..135  Adafruit DotStar FeatherWing 12x6     ESP out6 -> U149
+  // ONE APA102 chain on ESP out6 (U149), 136 pixels, data flows:
+  //   ESP out6 -> 8x8 matrix (pixels 0..63) -> DotStar FeatherWing 12x6 (pixels 64..135)
   //
-  // Layout: the FeatherWing on top, the 8x8 matrix centered below it.
-  // Units = one LED position per grid (the two boards have different pitches).
+  // Physical layout: the FeatherWing sits ABOVE the 8x8 matrix, matrix centered.
+  // Units = one LED position per board (the boards have different pitches).
   // FeatherWing wiring follows Adafruit's DotStarMatrix example
-  // (TOP + LEFT + ROWS + PROGRESSIVE). If an index test shows mirrored rows or
-  // columns, flip the switches below; nothing else has to change.
+  // (TOP + LEFT + ROWS + PROGRESSIVE). If a test pattern shows mirrored rows
+  // or columns, flip the switches below; nothing else has to change.
   var MATRIX = { w: 8, h: 8, x0: 2, y0: 7, serpentine: true, flipX: false, flipY: false }
   var FEATHERWING = { w: 12, h: 6, x0: 0, y0: 0, serpentine: false, flipX: false, flipY: false }
 
@@ -28,5 +26,6 @@ function (pixelCount) {
     return pts
   }
 
+  // chain order: matrix first, FeatherWing last
   return grid(MATRIX).concat(grid(FEATHERWING))
 }

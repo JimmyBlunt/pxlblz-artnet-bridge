@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "_comment": "ESP32 test rig with the ESP config left UNCHANGED (out0 WS2812B 203 px U120-U121, out6 APA102 127 px U149). The real hardware is one APA102 chain on out6: 8x8 matrix + FeatherWing 12x6 = 136 px (map esp-test-8x8-12x6.js). Map pixels 0..126 go to U149; pixels 127..135 cannot be driven until out6 is set to 136. out0 gets black from the padded area (pixels 136..338) only so the ESP sees every expected universe and counts frames complete.",
+  "input": {"pixel_count": 339, "fps_target": 60, "stale_timeout_ms": 1000, "on_stale": "blackout", "variable_size": true},
+  "artnet": {"udp_port": 6454, "unicast": true},
+  "controllers": [
+    {"name": "ESP_TEST", "target_ip": "172.20.10.2", "fps_target": 60}
+  ],
+  "routes": [
+    {"name": "ESP_OUT6_APA102_CHAIN_127", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 7, "pixel_start": 0, "pixel_count": 127, "universe_start": 149, "color_order": "RGB"},
+    {"name": "ESP_OUT0_UNUSED_BLACK", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 1, "pixel_start": 136, "pixel_count": 203, "universe_start": 120, "color_order": "RGB"}
+  ]
+}
