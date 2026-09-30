@@ -5,7 +5,7 @@
 //   pixels   0..63   8x8 matrix         (bottom, centered)
 //   pixels  64..135  DotStar FeatherWing 12x6 (top)
 // Both boards form one continuous 12 x 15 cell carpet (FeatherWing rows 0..5,
-// one empty row, matrix rows 7..14 at columns 2..9).
+// one empty row, matrix rows 7..14 at columns 4..11 = right-aligned).
 //
 // Cell positions come from the MAP (x, y), not from index arithmetic: the first
 // frame measures each board's coordinate range, so flipping the map's
@@ -13,11 +13,23 @@
 //
 // Unchanged from the cube version: entry, living peak, the four tails
 // (A Long Reverse, B Water Resonance, C Reflected Waves, D Organic Water),
-// 60 s per variant, timing and hardness mapping.
+// 60 s per variant and the hardness mapping.
+//
+// Wave timing (v0.6b): one cycle = WAVE (entry + peak + tail) + TROUGH (quiet).
+// Both are set independently; the cycle clock runs continuously, so moving a
+// slider never makes the wave jump.
+//
+// Sliders added in v0.6b (defaults reproduce the v0.6 look):
+//   Helligkeit            overall brightness
+//   Abdeckung             share of pixels the wave reaches (others keep only the
+//                         quiet base glitter), 0..100 %
+//   Wellenlaenge          duration of the bright wave, 0.4x .. 1.6x
+//   Wellental Laenge      quiet time between two waves, 0 .. 40 time units
+//   Wellental Schwingen   gentle swell inside the trough, faded in and out
+//                         smoothly at both ends (0 = off)
 //
 // Indicator: 1/2/3/4 BLUE dots in the bottom row of the 8x8, left side.
-// Router config while the ESP out6 is still 127 px: routes.esp-test-172-chain-compat.json
-// (the last 9 FeatherWing LEDs stay dark until out6 = 136 px).
+// Router config: routes.esp-test-172-8x8-12x6.json (ESP out6 = 136 px).
 
 export var hue = 0.95
 export var saturation = 0.78
@@ -32,6 +44,23 @@ export function sliderFeatherWing(v) { featherWing = v }
 export function sliderSpeed(v) { speed = v }
 export function sliderEntry(v) { entry = v }
 export function sliderCarpetFlutter(v) { carpetFlutter = v }
+
+export var helligkeit = 1
+export var abdeckung = 1
+export var wellenlaenge = 0.5        // 0.5 -> 1.0x (v0.6 wave length)
+export var wellentalLaenge = 0.35    // 0.35 -> 14 time units of quiet
+export var wellentalSchwingen = 0
+
+export function sliderHelligkeit(v) { helligkeit = v }
+export function sliderAbdeckung(v) { abdeckung = v }
+export function sliderWellenlaenge(v) { wellenlaenge = v }
+export function sliderWellentalLaenge(v) { wellentalLaenge = v }
+export function sliderWellentalSchwingen(v) { wellentalSchwingen = v }
+
+// continuous wave clock in time units (v0.6: 56 units per 9.6 s of t)
+var qPos = 0
+var qCycle = 0
+var Q_PER_T = 56 / 9.6
 
 var t = 0
 var compareClock = 0
@@ -60,6 +89,8 @@ var wMaxY = -9999
 
 // set per pixel in render2D, read by the resonance functions
 var curSpatial = 0
+// brightness swell of the trough for the current pixel (set by troughSwing)
+var troughLift = 0
 
 function fract(v) { return v - floor(v) }
 function clamp01(v) { return max(0, min(1, v)) }
@@ -104,11 +135,42 @@ function carpetShape(e,index) {
   return clamp01(rise + window*amount*flutter)
 }
 
-function entryEnvelope(q,index) {
-  var entrySpan = 6 + entry*10
-  var entryStart = 56-entrySpan
+// wave length scale from the Wellenlaenge slider: 0.4x .. 1.6x
+function crestScale() { return 0.4 + 1.2*wellenlaenge }
+function entrySpanQ() { return (6 + entry*10)*crestScale() }
+function troughQ() { return wellentalLaenge*40 }
+
+// Longest possible wave of a variant (peak hold max 6.2, tail max per slot), so
+// the trough is never eaten by a long random tail.
+function waveQ(slot) {
+  var base = 6 + entry*10
+  var tailMax = base*2.08
+  if (slot == 0) tailMax = base*1.72
+  if (slot == 1) tailMax = base*1.95
+  if (slot == 3) tailMax = base*2.24
+  return (6.2 + tailMax)*crestScale() + entrySpanQ()
+}
+function cycleQ(slot) { return waveQ(slot) + troughQ() }
+
+function entryEnvelope(q,index,cycleLen) {
+  var entrySpan = entrySpanQ()
+  var entryStart = cycleLen-entrySpan
   if (q < entryStart) return 0
   return carpetShape((q-entryStart)/entrySpan,index)
+}
+
+// Quiet trough between tail end (a) and entry start (b). sin^2 window: zero at
+// both ends, so switching the swing on or off never creates a step.
+function troughSwing(q,a,b,cycle) {
+  if (wellentalSchwingen <= 0 || b - a < 0.5) return 0
+  var u = clamp01((q-a)/(b-a))
+  var win = sin(PI*u)
+  win = win*win
+  var p = hash2(cycle,301)*TAU
+  var swell = 0.5 + 0.5*sin(TAU*(1.5*u - curSpatial*0.35) + p)
+  var amount = wellentalSchwingen*win*swell
+  troughLift = 0.30*amount     // visible brightness swell
+  return 0.6*amount            // plus livelier sparkle in the swell
 }
 
 function livingPeak(u,cycle,index) {
@@ -203,15 +265,19 @@ function waterTail(q,cycle,index,slot) {
   return clamp01(env)
 }
 
-function envelope(q,cycle,index,slot) {
-  if (q >= 38) return entryEnvelope(q,index)
+function envelope(q,cycle,index,slot,cycleLen) {
+  var entryStart = cycleLen - entrySpanQ()
+  if (q >= entryStart) return entryEnvelope(q,index,cycleLen)
 
-  var hold = peakHold(cycle)
+  var k = crestScale()
+  var hold = peakHold(cycle)*k
   if (q < hold) return livingPeak(q/hold,cycle,index)
 
-  var endQ = hold + tailSpan(slot,cycle)
-  if (q < endQ) return waterTail(q,cycle,index,slot)
-  return 0
+  var endQ = hold + tailSpan(slot,cycle)*k
+  if (q < endQ) return waterTail(q/k,cycle,index,slot)
+
+  // quiet trough; optional smooth swing
+  return troughSwing(q,endQ,entryStart,cycle)
 }
 
 export function beforeRender(delta) {
@@ -225,6 +291,11 @@ export function beforeRender(delta) {
   var rate = 0.55 + speed*0.9
   t += dt*rate
   compareClock += dt
+
+  // continuous wave clock: a changed cycle length only affects the future
+  var len = cycleQ(floor(compareClock/60)%4)
+  qPos += dt*rate*Q_PER_T
+  while (qPos >= len) { qPos -= len; qCycle += 1 }
   activeVariant = (floor(compareClock/60)%4)+1
   secondsInVariant = compareClock - floor(compareClock/60)*60
 }
@@ -247,7 +318,7 @@ export function render2D(index,x,y) {
   if (isMatrix) {
     col = toCell(x, mMinX, mMaxX, 7)
     row = toCell(y, mMinY, mMaxY, 7)
-    gx = 2 + col
+    gx = 4 + col   // 8x8 is right-aligned under the FeatherWing
     gy = 7 + row
     layerGain = 1
   } else {
@@ -262,7 +333,7 @@ export function render2D(index,x,y) {
 
   // 1..4 blue markers: bottom row of the 8x8, left side
   if (isMatrix && row == 7 && col < 4) {
-    if (col <= slot) hsv(0.62,1,0.35)
+    if (col <= slot) hsv(0.62,1,0.35*helligkeit)
     else hsv(0.62,1,0)
     return
   }
@@ -278,23 +349,28 @@ export function render2D(index,x,y) {
   var hardRnd = hardRandom(index,sparklePhase,256,40)*0.8 - 0.4
   var softRnd = smoothRandom(index,sparklePhase,256,40)*0.8 - 0.4
 
-  var absolutePhase = t/9.6
-  var cycle = floor(absolutePhase)
-  var scenePhase = fract(absolutePhase)
   curSpatial = (gx + gy)/WORLD_SPAN
-  var localPhase = scenePhase - curSpatial*0.10
-  localPhase -= (hash2(index,71)-0.5)*0.012*carpetFlutter
+  var cycleLen = cycleQ(slot)
+  // v0.6 offsets were fractions of a 56-unit cycle -> same offsets in time units
+  var lag = curSpatial*5.6
+  lag += (hash2(index,71)-0.5)*0.672*carpetFlutter
   var bend1 = sin(TAU*(t/2.7 + gx*0.115 - gy*0.071))
   var bend2 = sin(TAU*(t/4.9 - gx*0.057 + gy*0.133) + 1.7)
-  localPhase -= (0.0018*bend1 + 0.0011*bend2)*carpetFlutter
+  lag += (0.1008*bend1 + 0.0616*bend2)*carpetFlutter
 
-  var qLocal = fract(localPhase)*56
-  var env = envelope(qLocal,cycle,index,slot)
+  var qLocal = qPos - lag
+  var cycle = qCycle
+  while (qLocal < 0) { qLocal += cycleLen; cycle -= 1 }
+
+  // Abdeckung: only this share of pixels is reached by the wave
+  var env = 0
+  troughLift = 0
+  if (hash2(index,305) < abdeckung) env = envelope(qLocal,cycle,index,slot,cycleLen)
 
   var hardMix = smoother01((env-0.18)/0.58)
   var rnd = softRnd + (hardRnd-softRnd)*hardMix
 
-  var v = clamp01(base + rnd*env)*layerGain
-  v = pow(v,2.45)
+  var v = clamp01(base + troughLift + rnd*env)*layerGain
+  v = pow(v,2.45)*helligkeit
   hsv(hue,saturation,v)
 }
