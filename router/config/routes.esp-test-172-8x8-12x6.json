@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "_comment": "ESP32 test controller with the real hardware: 8x8 WS2812B matrix on out0 (64 px, U120) and an Adafruit DotStar FeatherWing 12x6 APA102 on out6 (72 px, U149). PXLBLZ map: pxlblz-integration/maps/esp-test-8x8-12x6.js. Firmware reorders colors itself, so the router sends RGB.",
+  "input": {"pixel_count": 136, "fps_target": 60, "stale_timeout_ms": 1000, "on_stale": "blackout", "variable_size": true},
+  "artnet": {"udp_port": 6454, "unicast": true},
+  "controllers": [
+    {"name": "ESP_TEST", "target_ip": "172.20.10.2", "fps_target": 60}
+  ],
+  "routes": [
+    {"name": "ESP_OUT0_8x8_WS2812", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 1, "pixel_start": 0, "pixel_count": 64, "universe_start": 120, "color_order": "RGB"},
+    {"name": "ESP_OUT6_12x6_APA102", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 7, "pixel_start": 64, "pixel_count": 72, "universe_start": 149, "color_order": "RGB"}
+  ]
+}
