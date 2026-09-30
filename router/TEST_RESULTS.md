@@ -340,3 +340,6 @@ Map (flipY on both boards) and `patterns/snowflake-icesparkle-carpet-v06-esp-tes
 imported into the local PXLBLZ D1 (backup of `.wrangler/state` taken first). User
 confirmation on the LEDs: all 136 LEDs lit, blue variant marker bottom-left on the 8x8.
 Open: 8x8 serpentine of the upper rows (assumed).
+Update: router chase test (`--pattern chase --fps 4`) on the rig — 8x8 rows run left->right
+without serpentine (user observation "B"). Map changed to `MATRIX.serpentine: false`; the
+local PXLBLZ map row was re-baked accordingly. Rig wiring is now fully verified.

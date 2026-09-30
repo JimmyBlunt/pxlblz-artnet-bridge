@@ -8,13 +8,12 @@ function (pixelCount) {
   // Physical layout: the FeatherWing sits ABOVE the 8x8 matrix, matrix centered.
   // Units = one LED position per board (the boards have different pitches).
   // Verified on the rig 2026-10-01: both boards start at the BOTTOM (flipY),
-  // FeatherWing rows run left->right without serpentine. 8x8: bottom row
-  // left->right confirmed (variant markers bottom-left); serpentine for the
-  // upper rows is assumed (only visible as a row-wise offset of the wave).
+  // Both boards: rows run left->right WITHOUT serpentine (8x8 confirmed with a
+  // router chase test, FeatherWing with the cube-pattern index test).
   // FeatherWing wiring was first assumed from Adafruit's DotStarMatrix example
   // (TOP + LEFT + ROWS + PROGRESSIVE). If a test pattern shows mirrored rows
   // or columns, flip the switches below; nothing else has to change.
-  var MATRIX = { w: 8, h: 8, x0: 2, y0: 7, serpentine: true, flipX: false, flipY: true }
+  var MATRIX = { w: 8, h: 8, x0: 2, y0: 7, serpentine: false, flipX: false, flipY: true }
   var FEATHERWING = { w: 12, h: 6, x0: 0, y0: 0, serpentine: false, flipX: false, flipY: true }
 
   function grid(g) {
