@@ -28,8 +28,14 @@
 //                         fade while moving the slider. Markers stay visible.
 //   Wellenlaenge          duration of the bright wave, 0.4x .. 1.6x
 //   Wellental Laenge      quiet time between two waves, 0 .. 40 time units
-//   Wellental Schwingen   gentle swell inside the trough, faded in and out
-//                         smoothly at both ends (0 = off)
+//   Wellental Schwingen   strength of the glimmer inside the trough (0 = off)
+//   Glimmen Ausklang      how slowly the glimmer fades out over the trough
+//                         (0 = gone after the first quarter, 1 = whole trough)
+//   Glimmen Kontrast      brightness difference of the glimmer
+//                         (0 = steady glow, 1 = full bright/dark pulsing)
+//   Wabber Form           shape of the trough wobble, blended continuously:
+//                         0 breathing, 0.33 travelling ripple,
+//                         0.67 per-LED shimmer, 1 heartbeat double pulse
 //
 // Indicator: 1/2/3/4 BLUE dots in the bottom row of the 8x8, left side.
 // Router config: routes.esp-test-172-8x8-12x6.json (ESP out6 = 136 px).
@@ -54,6 +60,9 @@ export var wellenlaenge = 0.5        // 0.5 -> 1.0x (v0.6 wave length)
 export var wellentalLaenge = 0.35    // 0.35 -> 14 time units of quiet
 export var wellentalSchwingen = 0
 export var density = 1
+export var glimmenAusklang = 0.6
+export var glimmenKontrast = 0.6
+export var wabberForm = 0
 
 export function sliderHelligkeit(v) { helligkeit = v }
 export function sliderAbdeckung(v) { abdeckung = v }
@@ -61,6 +70,9 @@ export function sliderWellenlaenge(v) { wellenlaenge = v }
 export function sliderWellentalLaenge(v) { wellentalLaenge = v }
 export function sliderWellentalSchwingen(v) { wellentalSchwingen = v }
 export function sliderDensity(v) { density = v }
+export function sliderGlimmenAusklang(v) { glimmenAusklang = v }
+export function sliderGlimmenKontrast(v) { glimmenKontrast = v }
+export function sliderWabberForm(v) { wabberForm = v }
 
 // continuous wave clock in time units (v0.6: 56 units per 9.6 s of t)
 var qPos = 0
@@ -166,16 +178,41 @@ function entryEnvelope(q,index,cycleLen) {
 
 // Quiet trough between tail end (a) and entry start (b). sin^2 window: zero at
 // both ends, so switching the swing on or off never creates a step.
-function troughSwing(q,a,b,cycle) {
+// The four wobble forms, each 0..1. u = position in the trough 0..1.
+function wobbleForm(k,u,cycle,index) {
+  var p = hash2(cycle,301)*TAU
+  if (k == 0) return 0.5 + 0.5*sin(TAU*(1.5*u - curSpatial*0.35) + p)          // breathing
+  if (k == 1) return 0.5 + 0.5*sin(TAU*(3.0*u - curSpatial*2.2) + p)           // travelling ripple
+  if (k == 2) return smoothRandom(index, u*0.5 + hash2(cycle,302), 12, 60)     // per-LED shimmer
+  var beat = fract(2.2*u + hash2(index,303)*0.15)                               // heartbeat
+  var b1 = max(0, 1 - abs(beat - 0.18)/0.10)
+  var b2 = max(0, 1 - abs(beat - 0.42)/0.12)*0.7
+  return smooth01(b1 + b2)
+}
+
+// Glimmer between tail end (a) and entry start (b): a short soft rise, then a
+// slow fade to exactly zero - it always ends dark before the next entry, so
+// the trough never creates a step at either end.
+function troughSwing(q,a,b,cycle,index) {
   if (wellentalSchwingen <= 0 || b - a < 0.5) return 0
   var u = clamp01((q-a)/(b-a))
-  var win = sin(PI*u)
-  win = win*win
-  var p = hash2(cycle,301)*TAU
-  var swell = 0.5 + 0.5*sin(TAU*(1.5*u - curSpatial*0.35) + p)
-  var amount = wellentalSchwingen*win*swell
-  troughLift = 0.30*amount     // visible brightness swell
-  return 0.6*amount            // plus livelier sparkle in the swell
+  var fadeEnd = 0.25 + 0.75*glimmenAusklang
+  var rise = smooth01(u/min(0.08, fadeEnd*0.5))
+  var fade = pow(1 - clamp01(u/fadeEnd), 1.6)
+  var shape = rise*fade
+  if (shape <= 0) return 0
+
+  // Wabber Form: continuous crossfade between neighbouring forms
+  var f = clamp01(wabberForm)*3
+  var k = min(2, floor(f))
+  var m = f - k
+  var wob = wobbleForm(k,u,cycle,index)*(1-m) + wobbleForm(k+1,u,cycle,index)*m
+
+  // Glimmen Kontrast: 0 = steady glow, 1 = full swing between bright and dark
+  var glimmer = (1 - glimmenKontrast) + glimmenKontrast*wob
+  var amount = wellentalSchwingen*shape*glimmer
+  troughLift = 0.30*amount     // visible glow
+  return 0.6*amount            // plus livelier sparkle in the glow
 }
 
 function livingPeak(u,cycle,index) {
@@ -282,7 +319,7 @@ function envelope(q,cycle,index,slot,cycleLen) {
   if (q < endQ) return waterTail(q/k,cycle,index,slot)
 
   // quiet trough; optional smooth swing
-  return troughSwing(q,endQ,entryStart,cycle)
+  return troughSwing(q,endQ,entryStart,cycle,index)
 }
 
 export function beforeRender(delta) {
