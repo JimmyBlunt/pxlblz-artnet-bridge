@@ -295,3 +295,25 @@ Reading:
 - LED output stays at ~30 FPS in every step: the firmware's `targetFps` 30 caps physical
   output; faster complete frames are accepted and superseded.
 - Wi-Fi hotspot is not representative of the wired installation controllers.
+
+### H-ESP2 — same controller with firmware `targetFps` 60 (changed by user in the controller UI, saved)
+
+Router config `routes.esp-test-172.json` now `fps_target` 60.
+
+```text
+fps  sent   rx complete        rx packets     incompl  timeouts  LED out frames (fps)
+ 30    600   596  (99.33 %)     1790/1800          1         0     587  (29.4)
+ 45    900   898  (99.78 %)     2696/2700          1         0     862  (43.1)
+ 60   1200  1192  (99.33 %)     3584/3600          4         1    1130  (56.5)
+ 75   1500  1484  (98.93 %)     4457/4500          3         0    1170  (58.5, firmware cap)
+ 90   1800  1757  (97.61 %)     5292/5400         14         0    1163  (58.2)
+
+60 fps for 300 s:
+ 60  17998 17793  (98.86 %)    53540/53994        95         9   16807  (56.0)
+router: exact 60.0 fps, send avg 0.26 ms, 0 send errors
+```
+
+Reading: over the phone hotspot ~0.8 % of packets are lost in transit; complete frames
+that arrive bunched inside one output period supersede each other, so LEDs show ~56 fps
+for 60 sent. Router-side output is exact; the remaining gap is the Wi-Fi link.
+Next: repeat on a proper AP / wired link for a representative number.
