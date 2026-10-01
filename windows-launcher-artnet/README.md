@@ -6,6 +6,10 @@ dedicated browser profile — the Art-Net router v0.3 replaces fcserver + Fadeca
 Installed separately (`%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet`, own mutex and browser
 profile), so it does not interfere with an existing Fadecandy installation.
 
+**Configuration page:** while the router runs, `http://127.0.0.1:9988/` edits controllers, IPs,
+routes and input live (validated, applied without restart, saved with backup), finds controllers
+on the network and runs test patterns.
+
 **Configuration help (German, step by step: controller IPs, routing targets, universes,
 LED counts, changing the active config, troubleshooting):
 [`docs/KONFIGURATION_HILFE.md`](../docs/KONFIGURATION_HILFE.md).**
@@ -48,7 +52,7 @@ Double-click **PXLBLZ-IDE - ArtNet** on the desktop.
 | --- | --- | --- |
 | Local API and D1 | localhost:5174 | `__identity` = `PXLBLZ-IDE-main` |
 | IDE with output adapter | localhost:5175 | `__identity` = `PXLBLZ-IDE`; served Preview contains `createExternalPixelOutput` |
-| Art-Net router v0.3 | ws://127.0.0.1:9980/pixels, status http://127.0.0.1:9981/status | executable path, config in live process arguments, `--list-routes` valid |
+| Art-Net router v0.3 | ws://127.0.0.1:9980/pixels, status http://127.0.0.1:9988/status | executable path, config in live process arguments, `--list-routes` valid |
 | Local account | both IDE API routes | signed `github:local-dev` session accepted |
 
 The login helper creates the signed session in the background, verifies it against both

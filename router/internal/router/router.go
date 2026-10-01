@@ -145,6 +145,30 @@ func (r *Router) Close() error {
 
 func (r *Router) Controllers() []*Controller { return r.controllers }
 
+// Sequences returns the next Art-Net sequence number per controller IP.
+func (r *Router) Sequences() map[string]byte {
+	out := make(map[string]byte, len(r.controllers))
+	for _, c := range r.controllers {
+		c.mu.Lock()
+		out[c.cfg.TargetIP] = c.seq
+		c.mu.Unlock()
+	}
+	return out
+}
+
+// RestoreSequences continues the sequence of controllers that already existed
+// before a live config change. A receiver treats a backwards jump of more than
+// 127 as stale, so restarting at 1 could blank its output for up to a second.
+func (r *Router) RestoreSequences(seqs map[string]byte) {
+	for _, c := range r.controllers {
+		if s, ok := seqs[c.cfg.TargetIP]; ok && s != 0 {
+			c.mu.Lock()
+			c.seq = s
+			c.mu.Unlock()
+		}
+	}
+}
+
 // Stats aggregates all controllers. Frames, LastFrameTime and MaxFrameTime
 // are the maximum over controllers; packets, bytes, errors and TotalFrameTime
 // are summed. Use SendTotals for an average send time per controller frame.

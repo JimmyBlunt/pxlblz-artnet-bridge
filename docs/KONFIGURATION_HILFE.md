@@ -8,6 +8,39 @@ Stand: v0.3 (`feature/v0.3-multi-controller`), Windows-Starter `windows-launcher
 
 ---
 
+## 0. Der einfache Weg: Einstellungsseite des Routers
+
+Solange der Router läuft, gibt es eine zentrale Einstellungsseite im Browser:
+
+```text
+http://127.0.0.1:9988/        (Tab-Titel „PXLBLZ-IDE~ArtNet · Router“)
+```
+
+Dort lässt sich alles aus diesem Dokument ohne Texteditor und **ohne Neustart** erledigen:
+
+| Aufgabe | Auf der Seite |
+| --- | --- |
+| Controller-IP geändert | Abschnitt **Controller** → IP-Feld ändern (alle Routen ziehen mit) – oder **Controller im Netz suchen** → beim gefundenen Gerät „IP übernehmen für …“ |
+| Neuer Controller | **Controller im Netz suchen** → „Als Controller übernehmen“ (Ausgänge, LED-Anzahl und Universes kommen direkt vom Controller) |
+| LED-Anzahl am Controller geändert | beim Controller „Ausgänge vom Controller übernehmen“ |
+| Routen, Universes, Farben, FPS, Eingang | direkt in den Tabellen/Feldern |
+| Prüfen | Knopf **Prüfen** (zeigt Fehler und die geplante Ausgabe) |
+| Aktivieren | **Übernehmen & speichern** – wirkt sofort, die vorige Datei wird in `configackups\` gesichert (die letzten 20) |
+| Verdrahtung/Ausgabe testen | Abschnitt **Testmuster** (Lauflicht, Port-ID, Regenbogen, Weiß, Schwarz) – PXLBLZ übernimmt danach automatisch wieder |
+| Kontrolle | jede Controller-Karte zeigt live „Router sendet … fps“ und „Controller meldet … vollständig/s · … unvollständig/s“ |
+
+Die Seite ist nur vom eigenen PC erreichbar (127.0.0.1). Die gespeicherte Datei ist die,
+mit der der Router gestartet wurde (Pfad unten auf der Seite).
+
+**Port 9988, nicht 9981:** TouchDesigner belegt 9981. Belegt ein anderes Programm den Port,
+meldet der Router beim Start `WARNING: port … answers for ANOTHER program`; dann mit
+`--status-listen 127.0.0.1:<freier Port>` starten.
+
+Die folgenden Abschnitte erklären, was die Seite im Hintergrund tut, und wie es ohne die
+Seite geht.
+
+---
+
 ## 1. Der Datenweg auf einen Blick
 
 ```text
@@ -17,7 +50,7 @@ Stand: v0.3 (`feature/v0.3-multi-controller`), Windows-Starter `windows-launcher
         ▼
  pxlblz-router.exe  (E:\PXLBLZ-ArtNet\artnet\)
    liest:  config\<deine-config>.json
-   lauscht: ws://127.0.0.1:9980/pixels   Status: http://127.0.0.1:9981/status
+   lauscht: ws://127.0.0.1:9980/pixels   Status: http://127.0.0.1:9988/status
         │  Art-Net (ArtDmx, UDP-Port 6454, Unicast)
         ▼  an target_ip jedes Controllers
  Art-Net-Controller (ESP32 / Teensy), z. B. 10.0.0.248
@@ -58,7 +91,7 @@ angepasst – an PXLBLZ und an der Map ändert sich nichts.
 | 5174 | PXLBLZ-API + lokale Datenbank (`PXLBLZ-IDE-main`) |
 | 5175 | PXLBLZ-Oberfläche mit Art-Net-Ausgabe (`PXLBLZ-IDE`) |
 | 9980 | Router-Eingang (WebSocket, Pixel von PXLBLZ) |
-| 9981 | Router-Status (`http://127.0.0.1:9981/status`) |
+| 9988 | Router-Status und **Einstellungsseite** (`http://127.0.0.1:9988/`) – nicht 9981: dort lauscht TouchDesigner |
 | 6454 (UDP) | Art-Net zum Controller (ausgehend) |
 
 ---
@@ -170,7 +203,7 @@ steigen, `framesIncomplete` darf nicht mitsteigen.
 5. Den laufenden Router beenden: Task-Manager → `pxlblz-router.exe` → Task beenden.
    (Der Starter startet einen bereits laufenden Router nicht neu.)
 6. Doppelklick auf **PXLBLZ-IDE - ArtNet** auf dem Desktop.
-7. Kontrolle: `http://127.0.0.1:9981/status` zeigt bei `controllers` die neue
+7. Kontrolle: `http://127.0.0.1:9988/status` zeigt bei `controllers` die neue
    `target_ip`, und am Controller steigt `framesComplete`.
 8. Damit die IP sich nicht mehr ändert: im WLAN-/LAN-Router eine **feste IP
    (DHCP-Reservierung)** für den Controller anlegen.
@@ -237,7 +270,7 @@ Sequenznummer** – unterschiedliche FPS pro Controller sind möglich.
 | Prüfung | Wie |
 | --- | --- |
 | Config gültig, IPs/Universes richtig | `pxlblz-router.exe --config <datei> --list-routes` |
-| Router läuft, PXLBLZ verbunden | `http://127.0.0.1:9981/status` → `ws_clients` = 1, `rx_frames` steigt |
+| Router läuft, PXLBLZ verbunden | `http://127.0.0.1:9988/status` → `ws_clients` = 1, `rx_frames` steigt |
 | Controller empfängt vollständig | `http://<controller-ip>/api/status` → `framesComplete` steigt, `framesIncomplete` nicht |
 | Netz erreichbar | `ping <controller-ip>` |
 | Starter-Status | `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\artnet-start-status.txt` |

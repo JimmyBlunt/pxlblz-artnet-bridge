@@ -10,7 +10,7 @@ import (
 type LatestFrame struct {
 	mu       sync.Mutex
 	buf      []byte
-	variable bool
+	variable atomic.Bool
 	have     bool
 	gen      uint64
 	consumed uint64
@@ -40,12 +40,16 @@ func (l *LatestFrame) Size() int { return len(l.buf) }
 // AcceptVariableSize makes Submit take any whole-pixel frame length: the first
 // Size() bytes are used and a shorter frame clears the rest, so unused LEDs do
 // not keep colors from a previous, longer frame. Call before input starts.
-func (l *LatestFrame) AcceptVariableSize() { l.variable = true }
+func (l *LatestFrame) AcceptVariableSize() { l.variable.Store(true) }
+
+// SetVariableSize switches between variable-size and exact-size input; safe
+// while input is running (used when a new config is applied live).
+func (l *LatestFrame) SetVariableSize(on bool) { l.variable.Store(on) }
 
 func (l *LatestFrame) Reject() { l.invalid.Add(1) }
 
 func (l *LatestFrame) Submit(frame []byte) error {
-	if l.variable {
+	if l.variable.Load() {
 		if len(frame) == 0 || len(frame)%3 != 0 {
 			l.invalid.Add(1)
 			return fmt.Errorf("frame length %d must contain complete RGB pixels", len(frame))

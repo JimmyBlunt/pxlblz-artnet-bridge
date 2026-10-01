@@ -16,7 +16,9 @@ import (
 // staleness handling. A version 1 file may also use the new optional fields;
 // the version number only gates what is required, not what is allowed.
 type Config struct {
-	Version     int          `json:"version"`
+	Version int `json:"version"`
+	// Comment is free text kept when the config is saved from the web UI.
+	Comment     string       `json:"_comment,omitempty"`
 	Input       InputConfig  `json:"input"`
 	ArtNet      ArtNet       `json:"artnet"`
 	Controllers []Controller `json:"controllers,omitempty"`

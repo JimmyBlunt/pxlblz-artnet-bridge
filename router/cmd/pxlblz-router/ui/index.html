@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PXLBLZ-IDE~ArtNet · Router</title>
+<style>
+:root{--bg:#f6f6f8;--panel:#fff;--line:#dcdce3;--text:#1c1c24;--muted:#6b6b78;--accent:#3a63d8;--ok:#1f8a4c;--warn:#b26b00;--bad:#c23434;--chip:#eef0f6;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111218;--panel:#1a1b23;--line:#2c2d38;--text:#e9e9f0;--muted:#9a9aab;--accent:#7ea0ff;--ok:#5fd38f;--warn:#f0b44c;--bad:#ff8080;--chip:#24252f;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+header h1{font-size:17px;margin:0;font-weight:650}
+header .sub{color:var(--muted);font-size:12px}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.pill{background:var(--chip);border-radius:99px;padding:3px 10px;font-size:12px;white-space:nowrap}
+.pill.ok{color:var(--ok)}.pill.bad{color:var(--bad)}.pill.warn{color:var(--warn)}
+main{max-width:1180px;margin:0 auto;padding:16px;display:grid;gap:16px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+section h2{font-size:15px;margin:0 0 4px}
+section p.hint{margin:0 0 12px;color:var(--muted);font-size:12.5px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:8px}
+.card .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card .live{font-size:12.5px;color:var(--muted);display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
+.card .live b{color:var(--text);font-weight:600}
+label{display:grid;gap:3px;font-size:12px;color:var(--muted)}
+label.inline{display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px}
+input,select,textarea{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;min-width:0}
+input[type=number]{width:100%}
+textarea{width:100%;min-height:260px;font:12px/1.4 Consolas,monospace}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.row>label{flex:1 1 120px}
+button{font:inherit;border:1px solid var(--line);background:var(--chip);color:inherit;border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td input[type=number]{width:84px}
+td input[type=text]{width:100%}
+.tablewrap{overflow-x:auto}
+.msg{padding:8px 10px;border-radius:6px;font-size:13px;white-space:pre-wrap;display:none}
+.msg.show{display:block}
+.msg.ok{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.msg.bad{background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.msg.warn{background:color-mix(in srgb,var(--warn) 16%,transparent)}
+.actions{position:sticky;bottom:0;z-index:5;background:var(--panel);border-top:1px solid var(--line);padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.actions .state{color:var(--muted);font-size:12.5px;margin-right:auto}
+.actions .state.dirty{color:var(--warn);font-weight:600}
+pre.summary{margin:8px 0 0;font:12px/1.4 Consolas,monospace;color:var(--muted);white-space:pre-wrap}
+.found{display:grid;gap:8px;margin-top:10px}
+.found .card{grid-template-columns:1fr auto;align-items:center}
+.small{font-size:12px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--muted)}
+@media (max-width:640px){.pills{margin-left:0}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>PXLBLZ-IDE~ArtNet</h1><div class="sub" id="sub">Router · Konfiguration</div></div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<main>
+  <section>
+    <h2>Controller</h2>
+    <p class="hint">Jeder Controller ist ein Art-Net-Gerät (IP-Adresse). Ändert sich die IP, hier eintragen – alle Routen dieses Controllers werden mitgeändert. Live-Werte: links vom Router gesendet, rechts vom Controller gemeldet.</p>
+    <div class="grid" id="controllers"></div>
+    <div class="row" style="margin-top:10px"><button id="addCtrl">+ Controller manuell hinzufügen</button></div>
+  </section>
+
+  <section>
+    <h2>Controller im Netz suchen</h2>
+    <p class="hint">Sucht Controller mit der Firmware-Weboberfläche (ESP32/Teensy). Gefundene Controller kannst du mit ihren Ausgängen übernehmen – LED-Anzahl und Universes kommen dann direkt vom Controller.</p>
+    <div class="row">
+      <label>Netz(e), durch Komma getrennt<input id="nets" placeholder="10.0.0.0/24"></label>
+      <button id="scan">Suchen</button>
+    </div>
+    <div class="found" id="found"></div>
+  </section>
+
+  <section>
+    <h2>Routen</h2>
+    <p class="hint">Eine Route schickt einen Ausschnitt des PXLBLZ-Bildes (Pixel ab „Start“, „Anzahl“ Pixel) an einen Controller ab einem Universe. Je 170 Pixel ein Universe. Die Universes müssen zu den Ausgängen des Controllers passen.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>An</th><th>Name</th><th>Controller</th><th>Pixel-Start</th><th>Anzahl</th><th>Universe</th><th>Universes</th><th>Farben</th><th></th></tr></thead>
+      <tbody id="routes"></tbody>
+    </table></div>
+    <div class="row" style="margin-top:10px"><button id="addRoute">+ Route hinzufügen</button></div>
+  </section>
+
+  <section>
+    <h2>Eingang von PXLBLZ</h2>
+    <p class="hint">Wie der Router die Bilder von PXLBLZ verarbeitet.</p>
+    <div class="row">
+      <label>Pixel pro Bild<input type="number" id="in_pixels" min="1"></label>
+      <label>Standard-FPS<input type="number" id="in_fps" min="1" max="240"></label>
+      <label>Ohne Bild nach (ms)<input type="number" id="in_stale" min="0"></label>
+      <label>Dann<select id="in_onstale"><option value="blackout">schwarz senden</option><option value="hold">letztes Bild halten</option><option value="stop">nichts senden</option></select></label>
+      <label class="inline"><input type="checkbox" id="in_variable"> jede Pixelzahl annehmen</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Testmuster</h2>
+    <p class="hint">Ersetzt die PXLBLZ-Ausgabe für die gewählte Zeit. „Lauflicht“ zeigt die Verkabelungsreihenfolge (4 LEDs pro Sekunde).</p>
+    <div class="row">
+      <label style="flex:0 0 120px">Dauer (s)<input type="number" id="t_sec" value="30" min="1" max="600"></label>
+      <button data-test="chase">Lauflicht</button><button data-test="port-id">Port-ID</button>
+      <button data-test="rainbow">Regenbogen</button><button data-test="white">Weiß</button>
+      <button data-test="black">Schwarz</button><button id="t_stop" class="danger">Test beenden</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Erweitert</h2>
+    <details><summary>Konfiguration als JSON anzeigen / bearbeiten</summary>
+      <p class="hint" style="margin-top:8px">Änderungen hier mit „In Formular übernehmen“ in den Entwurf holen, dann unten prüfen und speichern.</p>
+      <textarea id="raw" spellcheck="false"></textarea>
+      <div class="row"><button id="rawLoad">In Formular übernehmen</button></div>
+    </details>
+    <p class="small" id="path" style="margin-top:10px"></p>
+  </section>
+  <div class="msg" id="msg"></div>
+</main>
+
+<div class="actions">
+  <span class="state" id="dirty">Keine Änderungen</span>
+  <button id="check">Prüfen</button>
+  <button id="revert">Verwerfen</button>
+  <button id="apply" class="primary">Übernehmen &amp; speichern</button>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const clone = o => JSON.parse(JSON.stringify(o));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ORDERS = ["RGB","RBG","GRB","GBR","BRG","BGR"];
+let applied = null, draft = null, status = null, prevStatus = null, remote = {}, remotePrev = {}, path = "";
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, {cache: "no-store", ...opts});
+  let body; try { body = await res.json(); } catch { throw new Error("Router antwortet nicht mit JSON (HTTP " + res.status + ")"); }
+  if (!res.ok && body && body.error) throw new Error(body.error);
+  return body;
+}
+const send = (url, method, obj) => api(url, {method, headers: {"Content-Type": "application/json"}, body: obj === undefined ? undefined : JSON.stringify(obj)});
+
+function msg(text, kind = "ok") { const m = $("msg"); m.textContent = text; m.className = "msg show " + kind; m.scrollIntoView({block: "nearest"}); }
+function isDirty() { return applied && JSON.stringify(applied) !== JSON.stringify(draft); }
+function markDirty() {
+  const d = isDirty(); const el = $("dirty");
+  el.textContent = d ? "Ungespeicherte Änderungen" : "Keine Änderungen";
+  el.className = "state" + (d ? " dirty" : "");
+  $("raw").value = JSON.stringify(draft, null, 2);
+}
+window.addEventListener("beforeunload", e => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------- rendering ----------
+function controllerOf(ip) { return (draft.controllers || []).find(c => c.target_ip === ip); }
+function liveOf(ip) { return (status?.controllers || []).find(c => c.target_ip === ip); }
+function rate(cur, prev, key, dt) { return prev && dt > 0 ? Math.max(0, (cur[key] - prev[key]) / dt) : null; }
+
+function renderControllers() {
+  const box = $("controllers"); box.innerHTML = "";
+  (draft.controllers || []).forEach((c, i) => {
+    const live = liveOf(c.target_ip), prevLive = (prevStatus?.controllers || []).find(x => x.target_ip === c.target_ip);
+    const dt = status && prevStatus ? (status.uptime_s - prevStatus.uptime_s) : 0;
+    const txFps = live ? rate(live, prevLive, "frames", dt) : null;
+    const r = remote[c.target_ip], rp = remotePrev[c.target_ip];
+    const rdt = r && rp ? (r.t - rp.t) / 1000 : 0;
+    const okFps = r?.status && rp?.status ? rate(r.status, rp.status, "framesComplete", rdt) : null;
+    const badFps = r?.status && rp?.status ? rate(r.status, rp.status, "framesIncomplete", rdt) : null;
+    const outs = r?.config ? r.config.outputs.filter(o => o.enabled).map(o => `Ausgang ${o.id}: ${esc(o.type)} ${o.pixelCount} LEDs ab U${o.startUniverse}`).join("<br>") : "";
+    const card = document.createElement("div"); card.className = "card";
+    card.innerHTML = `
+      <div class="head"><label class="inline"><input type="checkbox" data-k="enabled" ${c.enabled === false ? "" : "checked"}> <b>${esc(c.name)}</b></label>
+        <span class="small">${live ? (live.stale ? '<span style="color:var(--warn)">kein PXLBLZ-Bild</span>' : '<span style="color:var(--ok)">sendet</span>') : (c.enabled === false ? "aus" : "noch nicht übernommen")}</span></div>
+      <div class="row">
+        <label>Name<input type="text" data-k="name" value="${esc(c.name)}"></label>
+        <label>IP-Adresse<input type="text" data-k="target_ip" value="${esc(c.target_ip)}" placeholder="10.0.0.248"></label>
+        <label style="flex:0 0 80px">FPS<input type="number" data-k="fps_target" min="1" max="240" value="${c.fps_target || ""}"></label>
+      </div>
+      <div class="live">
+        <span>Router sendet</span><b>${txFps === null ? "–" : txFps.toFixed(1) + " fps"}${live ? ` · ${live.send_errors} Fehler` : ""}</b>
+        <span>Controller meldet</span><b>${r?.error ? '<span style="color:var(--bad)">nicht erreichbar</span>' : okFps === null ? "–" : `${okFps.toFixed(1)} vollständig/s · <span style="color:${badFps > 0.5 ? "var(--bad)" : "inherit"}">${badFps.toFixed(1)} unvollständig/s</span>`}</b>
+        ${r?.config ? `<span>Firmware</span><b>${esc(r.config.hardwareProfile || "?")}, Ziel ${r.config.targetFps} fps</b><span>Ausgänge</span><b>${outs || "keine aktiven"}</b>` : ""}
+      </div>
+      <div class="row">
+        <button data-act="import">Ausgänge vom Controller übernehmen</button>
+        <button data-act="open">Controller-Seite öffnen</button>
+        <button data-act="remove" class="danger">Entfernen</button>
+      </div>`;
+    card.querySelectorAll("[data-k]").forEach(inp => inp.addEventListener("change", () => {
+      const k = inp.dataset.k;
+      if (k === "enabled") c.enabled = inp.checked;
+      else if (k === "fps_target") c.fps_target = Number(inp.value) || undefined;
+      else if (k === "target_ip") { const old = c.target_ip, nu = inp.value.trim(); c.target_ip = nu; draft.routes.forEach(rt => { if (rt.target_ip === old) rt.target_ip = nu; }); renderRoutes(); }
+      else c[k] = inp.value.trim();
+      markDirty();
+    }));
+    card.querySelector('[data-act=import]').onclick = () => importOutputs(c.target_ip, c.name);
+    card.querySelector('[data-act=open]').onclick = () => window.open("http://" + c.target_ip + "/", "_blank", "noopener");
+    card.querySelector('[data-act=remove]').onclick = () => {
+      if (!confirm(`Controller ${c.name} (${c.target_ip}) und seine Routen aus dem Entwurf entfernen?`)) return;
+      draft.controllers.splice(i, 1); draft.routes = draft.routes.filter(rt => rt.target_ip !== c.target_ip); renderAll(); markDirty();
+    };
+    box.appendChild(card);
+  });
+}
+
+function renderRoutes() {
+  const tb = $("routes"); tb.innerHTML = "";
+  const ips = (draft.controllers || []).map(c => c.target_ip);
+  draft.routes.forEach((rt, i) => {
+    const n = Math.ceil(rt.pixel_count / 170) || 0;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="checkbox" data-k="enabled" ${rt.enabled ? "checked" : ""}></td>
+      <td><input type="text" data-k="name" value="${esc(rt.name)}"></td>
+      <td><select data-k="target_ip">${[...new Set([...ips, rt.target_ip])].map(ip => `<option ${ip === rt.target_ip ? "selected" : ""} value="${esc(ip)}">${esc((controllerOf(ip)?.name || "?") + " · " + ip)}</option>`).join("")}</select></td>
+      <td><input type="number" data-k="pixel_start" min="0" value="${rt.pixel_start}"></td>
+      <td><input type="number" data-k="pixel_count" min="1" value="${rt.pixel_count}"></td>
+      <td><input type="number" data-k="universe_start" min="0" value="${rt.universe_start}"></td>
+      <td class="small">${n ? `U${rt.universe_start}${n > 1 ? "–U" + (rt.universe_start + n - 1) : ""}` : "–"}</td>
+      <td><select data-k="color_order">${ORDERS.map(o => `<option ${o === rt.color_order ? "selected" : ""}>${o}</option>`).join("")}</select></td>
+      <td><button class="danger" data-act="del" title="Route entfernen">✕</button></td>`;
+    tr.querySelectorAll("[data-k]").forEach(inp => inp.addEventListener("change", () => {
+      const k = inp.dataset.k;
+      rt[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Number(inp.value) : inp.value;
+      if (k === "pixel_count" || k === "universe_start") renderRoutes();
+      markDirty();
+    }));
+    tr.querySelector("[data-act=del]").onclick = () => { draft.routes.splice(i, 1); renderRoutes(); markDirty(); };
+    tb.appendChild(tr);
+  });
+}
+
+function renderInput() {
+  const inp = draft.input;
+  $("in_pixels").value = inp.pixel_count; $("in_fps").value = inp.fps_target;
+  $("in_stale").value = inp.stale_timeout_ms ?? 0; $("in_onstale").value = inp.on_stale || "hold";
+  $("in_variable").checked = !!inp.variable_size;
+}
+[["in_pixels","pixel_count",Number],["in_fps","fps_target",Number],["in_stale","stale_timeout_ms",Number],["in_onstale","on_stale",String]].forEach(([id,k,f]) =>
+  $(id).addEventListener("change", e => { draft.input[k] = f(e.target.value); markDirty(); }));
+$("in_variable").addEventListener("change", e => { draft.input.variable_size = e.target.checked; markDirty(); });
+
+function renderPills() {
+  const p = $("pills"); if (!status) { p.innerHTML = '<span class="pill bad">Router nicht erreichbar</span>'; return; }
+  const dt = prevStatus ? status.uptime_s - prevStatus.uptime_s : 0;
+  const rx = prevStatus && dt > 0 ? (status.rx_frames - prevStatus.rx_frames) / dt : null;
+  const pills = [];
+  pills.push(status.input === "ws" ? (status.ws_clients > 0 ? `<span class="pill ok">PXLBLZ verbunden</span>` : `<span class="pill warn">PXLBLZ nicht verbunden</span>`) : `<span class="pill">Eingang: Testmuster</span>`);
+  if (rx !== null) pills.push(`<span class="pill ${rx > 1 ? "ok" : "warn"}">PXLBLZ ${rx.toFixed(0)} Bilder/s</span>`);
+  if (status.test_pattern) pills.push(`<span class="pill warn">Test „${esc(status.test_pattern)}“ noch ${Math.ceil(status.test_left_s)} s</span>`);
+  pills.push(`<span class="pill">v${esc(status.version)}</span>`);
+  p.innerHTML = pills.join("");
+}
+
+function renderAll() { renderControllers(); renderRoutes(); renderInput(); markDirty(); }
+
+// ---------- actions ----------
+async function load() {
+  const doc = await api("/api/config");
+  applied = clone(doc.config); draft = clone(doc.config); path = doc.path;
+  draft.controllers = draft.controllers || []; applied.controllers = applied.controllers || [];
+  $("path").textContent = "Konfigurationsdatei: " + path;
+  renderAll();
+  showSummary(doc, false);
+}
+function showSummary(doc, announce = true) {
+  const lines = [];
+  if (doc.warnings?.length) lines.push("Hinweise:\n  " + doc.warnings.join("\n  "));
+  if (doc.summary?.length) lines.push("Geplante Ausgabe:\n  " + doc.summary.join("\n  "));
+  if (announce) msg((doc.ok ? "✓ " : "✗ ") + (doc.error || (doc.backup !== undefined ? "Gespeichert und angewendet." : "Konfiguration ist gültig.")) + (lines.length ? "\n\n" + lines.join("\n\n") : ""), doc.ok ? (doc.warnings?.length ? "warn" : "ok") : "bad");
+}
+$("check").onclick = async () => { try { showSummary(await send("/api/config/check", "POST", draft)); } catch (e) { msg("✗ " + e.message, "bad"); } };
+$("apply").onclick = async () => {
+  try {
+    const doc = await send("/api/config", "PUT", draft);
+    if (doc.ok) { applied = clone(doc.config); draft = clone(doc.config); draft.controllers ||= []; applied.controllers ||= []; renderAll(); }
+    showSummary(doc);
+    if (doc.ok && doc.backup) $("path").textContent = `Konfigurationsdatei: ${path} · vorige Version gesichert: ${doc.backup}`;
+  } catch (e) { msg("✗ " + e.message, "bad"); }
+};
+$("revert").onclick = () => { if (!isDirty() || confirm("Alle ungespeicherten Änderungen verwerfen?")) { draft = clone(applied); renderAll(); msg("Änderungen verworfen.", "ok"); } };
+$("addCtrl").onclick = () => {
+  const ip = prompt("IP-Adresse des Controllers (z. B. 10.0.0.248):"); if (!ip) return;
+  draft.controllers.push({name: "CTRL_" + ip.split(".").pop(), target_ip: ip.trim(), fps_target: draft.input.fps_target, enabled: true});
+  renderAll(); msg("Controller hinzugefügt. Tipp: „Ausgänge vom Controller übernehmen“ legt die passenden Routen an.", "ok");
+};
+$("addRoute").onclick = () => {
+  const ip = draft.controllers[0]?.target_ip || ""; const end = Math.max(0, ...draft.routes.map(r => r.pixel_start + r.pixel_count));
+  draft.routes.push({name: "ROUTE_" + (draft.routes.length + 1), enabled: true, target_ip: ip, physical_port: 1, pixel_start: end, pixel_count: 170, universe_start: 0, color_order: "RGB"});
+  renderRoutes(); markDirty();
+};
+async function importOutputs(ip, name) {
+  try {
+    const doc = await send(`/api/import?ip=${encodeURIComponent(ip)}&name=${encodeURIComponent(name || "")}`, "POST", draft);
+    if (!doc.config) throw new Error(doc.error || "keine Antwort");
+    draft = clone(doc.config); draft.controllers ||= []; renderAll();
+    showSummary({...doc, error: doc.ok ? `Ausgänge von ${ip} in den Entwurf übernommen – zum Aktivieren „Übernehmen & speichern“.` : doc.error});
+  } catch (e) { msg("✗ " + e.message, "bad"); }
+}
+$("rawLoad").onclick = () => { try { draft = JSON.parse($("raw").value); draft.controllers ||= []; renderAll(); msg("JSON in den Entwurf übernommen – noch nicht gespeichert.", "ok"); } catch (e) { msg("✗ JSON-Fehler: " + e.message, "bad"); } };
+
+$("scan").onclick = async () => {
+  const nets = $("nets").value.split(",").map(s => s.trim()).filter(Boolean);
+  const btn = $("scan"); btn.disabled = true; btn.textContent = "Suche läuft …"; $("found").innerHTML = "";
+  try {
+    const doc = await api("/api/discover?" + nets.map(n => "net=" + encodeURIComponent(n)).join("&"));
+    if (!doc.found?.length) { $("found").innerHTML = `<p class="small">Kein Controller in ${esc(doc.nets.join(", "))} gefunden. PC im selben Netz? VPN aus?</p>`; return; }
+    for (const f of doc.found) {
+      const known = controllerOf(f.ip);
+      const outs = f.config.outputs.filter(o => o.enabled).map(o => `${esc(o.type)} ${o.pixelCount} LEDs U${o.startUniverse}`).join(", ") || "keine aktiven Ausgänge";
+      const div = document.createElement("div"); div.className = "card";
+      div.innerHTML = `<div><b>${esc(f.ip)}</b> · ${esc(f.config.hardwareProfile || "Controller")} · Ziel ${f.config.targetFps} fps<br><span class="small">${outs}</span>${known ? `<br><span class="small" style="color:var(--ok)">bereits als „${esc(known.name)}“ konfiguriert</span>` : ""}</div>
+        <div class="row" style="justify-content:flex-end">
+          ${known ? "" : `<select data-r="target"><option value="">IP übernehmen für …</option>${draft.controllers.map(c => `<option value="${esc(c.target_ip)}">${esc(c.name)} (${esc(c.target_ip)})</option>`).join("")}</select>`}
+          <button data-r="import">${known ? "Ausgänge übernehmen" : "Als Controller übernehmen"}</button></div>`;
+      const sel = div.querySelector("[data-r=target]");
+      if (sel) sel.onchange = () => {
+        const old = sel.value; if (!old) return; const c = controllerOf(old);
+        c.target_ip = f.ip; draft.routes.forEach(rt => { if (rt.target_ip === old) rt.target_ip = f.ip; });
+        renderAll(); msg(`IP von „${c.name}“ im Entwurf auf ${f.ip} geändert (vorher ${old}). Zum Aktivieren „Übernehmen & speichern“.`, "ok");
+      };
+      div.querySelector("[data-r=import]").onclick = () => importOutputs(f.ip, known?.name || "");
+      $("found").appendChild(div);
+    }
+  } catch (e) { msg("✗ Suche fehlgeschlagen: " + e.message, "bad"); }
+  finally { btn.disabled = false; btn.textContent = "Suchen"; }
+};
+
+document.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
+  try { await send(`/api/test?pattern=${b.dataset.test}&seconds=${Number($("t_sec").value) || 30}`, "POST"); msg(`Testmuster „${b.textContent}“ läuft. PXLBLZ-Ausgabe ist so lange pausiert.`, "ok"); poll(); } catch (e) { msg("✗ " + e.message, "bad"); }
+});
+$("t_stop").onclick = async () => { try { await send("/api/test/stop", "POST"); msg("Test beendet – PXLBLZ-Ausgabe läuft wieder.", "ok"); poll(); } catch (e) { msg("✗ " + e.message, "bad"); } };
+
+// ---------- polling ----------
+async function poll() {
+  try { const s = await api("/status"); prevStatus = status; status = s; $("sub").textContent = `Router · ${s.input === "ws" ? "Eingang PXLBLZ" : "Eingang Testmuster"} · Config übernommen ${new Date(s.config_applied_at).toLocaleTimeString()}`; }
+  catch { status = null; }
+  renderPills();
+  if (draft) renderLiveOnly();
+}
+async function pollRemote() {
+  if (!draft) return;
+  await Promise.all((draft.controllers || []).filter(c => c.enabled !== false && /^\d+\.\d+\.\d+\.\d+$/.test(c.target_ip)).map(async c => {
+    try {
+      const d = await api("/api/controller?ip=" + encodeURIComponent(c.target_ip));
+      const t = Date.now() - (d.status_age_s || 0) * 1000;  // time the counters were read
+      const cur = remote[c.target_ip];
+      if (!cur || !cur.status || t - cur.t > 500) remotePrev[c.target_ip] = cur;  // only advance on fresh counters
+      remote[c.target_ip] = {...d, t};
+    }
+    catch (e) { remote[c.target_ip] = {error: e.message, t: Date.now()}; }
+  }));
+  renderLiveOnly();
+}
+// re-render controller cards without losing focus in an input field
+function renderLiveOnly() { if (!document.activeElement || !$("controllers").contains(document.activeElement)) renderControllers(); }
+
+(async () => {
+  try {
+    await load();
+    const sn = await api("/api/subnets"); $("nets").value = (sn.subnets || []).join(", ");
+  } catch (e) { msg("✗ " + e.message, "bad"); }
+  poll(); pollRemote();
+  setInterval(poll, 1000); setInterval(pollRemote, 3000);
+})();
+</script>
+</body>
+</html>

@@ -94,9 +94,21 @@ function clampByte(v: number): number {
   return Math.round(v * 255)
 }
 
+// A browser tab with hardware output is titled "PXLBLZ-IDE~ArtNet", so it can
+// be told apart from a normal PXLBLZ tab. Runs as soon as this module loads
+// (also on Gallery / Docs routes of the output-enabled tab).
+const ARTNET_TITLE = 'PXLBLZ-IDE~ArtNet'
+function markArtNetTitle(enabled: boolean): void {
+  if (typeof document === 'undefined') return
+  if (enabled) document.title = ARTNET_TITLE
+  else if (document.title === ARTNET_TITLE) document.title = 'PXLBLZ-IDE'
+}
+markArtNetTitle(queryEnabled())
+
 export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutput {
   const enabled = queryEnabled()
   const url = queryUrl()
+  markArtNetTitle(enabled)
 
   if (!enabled) {
     return {

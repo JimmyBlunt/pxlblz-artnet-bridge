@@ -2,24 +2,21 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	cfgpkg "pxlblz-router/internal/config"
+	"pxlblz-router/internal/engine"
 	"pxlblz-router/internal/frameinput"
 	"pxlblz-router/internal/pattern"
 	"pxlblz-router/internal/router"
-	"pxlblz-router/internal/scheduler"
 	"pxlblz-router/internal/wsmini"
 )
 
@@ -38,7 +35,7 @@ func main() {
 	listOnly := flag.Bool("list-routes", false, "validate config and print planned routes, then exit")
 	wsListen := flag.String("ws-listen", "127.0.0.1:9980", "websocket listen address for --input ws")
 	wsPath := flag.String("ws-path", "/pixels", "websocket path for --input ws")
-	statusListen := flag.String("status-listen", "127.0.0.1:9981", "HTTP status endpoint (GET /status); empty disables")
+	statusListen := flag.String("status-listen", "127.0.0.1:9988", "status + configuration web page (http://.../ and GET /status); empty disables")
 	perController := flag.Bool("per-controller-stats", true, "print one stats line per controller when more than one is configured")
 	flag.Parse()
 
@@ -59,13 +56,12 @@ func main() {
 		fatalIf(fmt.Errorf("input must be pattern or ws"))
 	}
 
-	r, err := router.New(cfg, *dryRun)
+	// planning / validation output (also used by --list-routes)
+	plan, err := router.New(cfg, true)
 	fatalIf(err)
-	defer r.Close()
-	if len(r.Controllers()) == 0 {
+	if len(plan.Controllers()) == 0 {
 		fatalIf(fmt.Errorf("no enabled routes/controllers in %s", *configPath))
 	}
-
 	fmt.Printf("PXLBLZ Art-Net Router v%s\n", version)
 	fmt.Printf("Pixels: %d (%d bytes/frame) | input FPS: %d | UDP: %d | input: %s | dry-run: %v\n",
 		cfg.Input.PixelCount, cfg.Input.PixelCount*3, cfg.Input.FPSTarget, cfg.ArtNet.UDPPort, mode, *dryRun)
@@ -78,19 +74,21 @@ func main() {
 		fmt.Printf("FPS override: every controller at %d fps\n", *fpsOverride)
 	}
 	fmt.Println("Controllers / routes:")
-	for _, s := range r.RouteSummary() {
+	for _, s := range plan.RouteSummary() {
 		fmt.Println("  " + s)
 	}
 	for _, w := range cfg.Warnings() {
 		fmt.Println("WARNING:", w)
 	}
+	plan.Close()
 	if *listOnly {
 		return
 	}
-
-	frameSize := cfg.Input.PixelCount * 3
-	latest, err := frameinput.NewLatestFrame(frameSize)
-	fatalIf(err)
+	if mode == "pattern" {
+		// validate the pattern name once before starting
+		probe := make([]byte, cfg.Input.PixelCount*3)
+		fatalIf(fillPattern(probe, cfg.Input.PixelCount, *patternName, cfg.Routes, 0, *walkSpeed))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,17 +111,24 @@ func main() {
 		}()
 	}
 
+	eng, err := engine.New(ctx, cfg, engine.Options{
+		DryRun:          *dryRun,
+		FPSOverride:     *fpsOverride,
+		Mode:            mode,
+		Pattern:         *patternName,
+		WalkSpeed:       *walkSpeed,
+		OnStaleOverride: *onStale,
+		StaleMSOverride: *staleMS,
+	})
+	fatalIf(err)
+	defer eng.Close()
+
 	var wsServer *wsmini.Server
 	switch mode {
 	case "ws":
-		maxPayload := frameSize
-		if cfg.Input.VariableSize {
-			latest.AcceptVariableSize()
-			maxPayload = max(frameSize, variableSizeMaxPayload)
-		}
-		wsServer, err = wsmini.NewServer(*wsListen, *wsPath, maxPayload, func(p []byte) {
-			_ = latest.Submit(p)
-		})
+		frameSize := cfg.Input.PixelCount * 3
+		maxPayload := max(frameSize, variableSizeMaxPayload) // the config may enable variable_size later
+		wsServer, err = wsmini.NewServer(*wsListen, *wsPath, maxPayload, eng.Submit)
 		fatalIf(err)
 		actual, err := wsServer.Start()
 		fatalIf(err)
@@ -139,48 +144,52 @@ func main() {
 		if *fpsOverride > 0 {
 			genFPS = *fpsOverride
 		}
-		routes := activeRoutes(cfg, r)
-		// validate pattern name once before starting
-		probe := make([]byte, frameSize)
-		fatalIf(fillPattern(probe, cfg.Input.PixelCount, *patternName, routes, 0, *walkSpeed))
-		go runPattern(ctx, latest, cfg.Input.PixelCount, *patternName, routes, *walkSpeed, genFPS)
 		fmt.Printf("Pattern %q generated at %d fps\n", *patternName, genFPS)
 	}
 
-	sched := scheduler.New(r, latest, scheduler.Options{
-		FPSOverride:  *fpsOverride,
-		StaleTimeout: time.Duration(cfg.Input.StaleTimeoutMS) * time.Millisecond,
-		OnStale:      cfg.Input.OnStale,
-	})
-
 	start := time.Now()
 	if *statusListen != "" {
-		stop, addr, err := startStatus(*statusListen, sched, latest, wsServer, start, mode)
+		absConfig, _ := filepath.Abs(*configPath)
+		stop, addr, err := startWeb(*statusListen, &webServer{eng: eng, ws: wsServer, configPath: absConfig, start: start})
 		if err != nil {
 			fmt.Println("WARNING: status endpoint disabled:", err)
 		} else {
 			defer stop()
 			fmt.Printf("Status: http://%s/status\n", addr)
+			fmt.Printf("Configuration page: http://%s/\n", addr)
 		}
 	}
 
-	schedErr := make(chan error, 1)
-	go func() { schedErr <- sched.Run(ctx) }()
-
 	statsTicker := time.NewTicker(time.Second)
 	defer statsTicker.Stop()
-	prev := sched.Status()
-	lastTotal := r.Stats()
-	lastSendFrames, lastSendTime := r.SendTotals()
-	var lastRX, lastReplaced, lastInvalid uint64
-
+	var (
+		lastRouter                    *router.Router
+		lastLatest                    *frameinput.LatestFrame
+		lastTotal                     router.Stats
+		lastSendFrames                uint64
+		lastSendTime                  time.Duration
+		lastRX, lastReplaced, lastInv uint64
+		prev                          = eng.Scheduler().Status()
+	)
 	for {
 		select {
-		case err := <-schedErr:
-			printFinal(r, latest, mode, start)
+		case <-ctx.Done():
+			printFinal(eng.Router(), eng.Latest(), mode, start)
+			return
+		case err := <-eng.Errors():
+			printFinal(eng.Router(), eng.Latest(), mode, start)
 			fatalIf(err)
 			return
 		case <-statsTicker.C:
+			r, latest := eng.Router(), eng.Latest()
+			if r != lastRouter { // a new config was applied: counters restart
+				lastRouter, lastTotal = r, router.Stats{}
+				lastSendFrames, lastSendTime = 0, 0
+				prev = eng.Scheduler().Status()
+			}
+			if latest != lastLatest {
+				lastLatest, lastRX, lastReplaced, lastInv = latest, 0, 0, 0
+			}
 			st := r.Stats()
 			txFPS := float64(st.Frames - lastTotal.Frames)
 			txPPS := st.Packets - lastTotal.Packets
@@ -196,14 +205,14 @@ func main() {
 				ist := latest.Stats()
 				wst := wsServer.Stats()
 				fmt.Printf("RX %5.1f fps | replaced %4d/s invalid %d/s clients %d | TX %5.1f fps %5d pkt/s | send avg %6.3f ms last %6.3f ms max %6.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
-					float64(ist.Submitted-lastRX), ist.Replaced-lastReplaced, ist.Invalid-lastInvalid, wst.Active,
+					float64(ist.Submitted-lastRX), ist.Replaced-lastReplaced, ist.Invalid-lastInv, wst.Active,
 					txFPS, txPPS,
 					avgSendMs,
 					float64(st.LastFrameTime.Microseconds())/1000.0,
 					float64(st.MaxFrameTime.Microseconds())/1000.0,
 					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
-				lastRX, lastReplaced, lastInvalid = ist.Submitted, ist.Replaced, ist.Invalid
+				lastRX, lastReplaced, lastInv = ist.Submitted, ist.Replaced, ist.Invalid
 			} else {
 				fmt.Printf("TX %5.1f fps | %5d pkt/s | send avg %7.3f ms last %7.3f ms max %7.3f ms | heap %5.1f MB gc %d goroutines %d | errors %d\n",
 					txFPS, txPPS,
@@ -213,12 +222,13 @@ func main() {
 					heapMB, mem.NumGC, runtime.NumGoroutine(),
 					st.SendErrors)
 			}
-			cur := sched.Status()
-			if *perController && len(cur) > 1 {
+			cur := eng.Scheduler().Status()
+			if *perController && len(cur) > 1 && len(cur) == len(prev) {
+				onStaleMode := eng.Config().Input.OnStale
 				for i, c := range cur {
 					state := "live"
 					if c.Stale {
-						state = "STALE/" + cfg.Input.OnStale
+						state = "STALE/" + onStaleMode
 					}
 					fmt.Printf("   %-18s %-15s TX %5.1f/%3d fps %5d pkt/s repeats %4d/s errors %d %s\n",
 						c.Name, c.TargetIP, float64(c.Frames-prev[i].Frames), c.FPS,
@@ -236,20 +246,6 @@ func main() {
 // (~350k RGB pixels), so a larger PXLBLZ map than the router config still fits.
 const variableSizeMaxPayload = 1 << 20
 
-func activeRoutes(cfg cfgpkg.Config, r *router.Router) []cfgpkg.Route {
-	on := map[string]bool{}
-	for _, c := range r.Controllers() {
-		on[c.TargetIP()] = true
-	}
-	var out []cfgpkg.Route
-	for _, rt := range cfg.Routes {
-		if rt.Enabled && on[rt.TargetIP] {
-			out = append(out, rt)
-		}
-	}
-	return out
-}
-
 func fillPattern(frame []byte, pixels int, name string, routes []cfgpkg.Route, n uint64, walkSpeed int) error {
 	switch strings.ToLower(name) {
 	case "port-id":
@@ -259,79 +255,6 @@ func fillPattern(frame []byte, pixels int, name string, routes []cfgpkg.Route, n
 	default:
 		return pattern.Fill(frame, pixels, name, n)
 	}
-}
-
-func runPattern(ctx context.Context, latest *frameinput.LatestFrame, pixels int, name string, routes []cfgpkg.Route, walkSpeed, fps int) {
-	frame := make([]byte, pixels*3)
-	t := time.NewTicker(time.Second / time.Duration(fps))
-	defer t.Stop()
-	var n uint64
-	for {
-		if err := fillPattern(frame, pixels, name, routes, n, walkSpeed); err == nil {
-			_ = latest.Submit(frame)
-		}
-		n++
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
-type statusDoc struct {
-	Version     string                       `json:"version"`
-	UptimeSec   float64                      `json:"uptime_s"`
-	Input       string                       `json:"input"`
-	RXFrames    uint64                       `json:"rx_frames"`
-	RXReplaced  uint64                       `json:"rx_replaced"`
-	RXInvalid   uint64                       `json:"rx_invalid"`
-	LastFrameMS *float64                     `json:"last_frame_age_ms"`
-	WSClients   int64                        `json:"ws_clients"`
-	Controllers []scheduler.ControllerStatus `json:"controllers"`
-}
-
-func startStatus(listen string, sched *scheduler.Scheduler, latest *frameinput.LatestFrame, ws *wsmini.Server, start time.Time, mode string) (func(), string, error) {
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		return nil, "", err
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
-		ist := latest.Stats()
-		doc := statusDoc{
-			Version:     version,
-			UptimeSec:   time.Since(start).Seconds(),
-			Input:       mode,
-			RXFrames:    ist.Submitted,
-			RXReplaced:  ist.Replaced,
-			RXInvalid:   ist.Invalid,
-			Controllers: sched.Status(),
-		}
-		if !ist.LastAt.IsZero() {
-			age := float64(time.Since(ist.LastAt).Microseconds()) / 1000
-			doc.LastFrameMS = &age
-		}
-		if ws != nil {
-			doc.WSClients = ws.Stats().Active
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(doc)
-	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
-	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Println("status endpoint stopped:", err)
-		}
-	}()
-	return func() {
-		ctx, c := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		_ = srv.Shutdown(ctx)
-		c()
-	}, ln.Addr().String(), nil
 }
 
 func printFinal(r *router.Router, latest *frameinput.LatestFrame, mode string, start time.Time) {
