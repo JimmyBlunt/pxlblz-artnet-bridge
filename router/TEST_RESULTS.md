@@ -391,3 +391,24 @@ Router test pattern `port-id` (page /api/test) on .253 (8 outputs), .251 (2 outp
 user confirmation "colors are good" - every output shows its port color (1 red, 2 green,
 3 blue, 4 cyan, 5 magenta, 6 yellow, 7 white, 8 red). Universes and color order confirmed;
 router sends RGB to all three (both firmwares reorder themselves).
+
+### H-INST3 — ESP32 firmware with receive task (rxQueueDrops), 2026-10-02
+
+.251 and .248 flashed with the firmware from `ESP_FIRMWARE_RX_FIX_PROMPT.md` (own Art-Net
+receive task + queue). `installation-fps-test.mjs --fps 60,30 --seconds 30`, rainbow,
+TouchDesigner output stopped (a first run with TouchDesigner also sending Art-Net gave
+controller counts above the router rate - invalid). .244 not reachable (timeout).
+
+```text
+fps  controller          router  complete  loss    incompl/s  LED out  output
+ 60  APA102 .251          60.0     59.5     0.88 %   0.08      58.2     12.2 ms
+ 60  Teensy .253          60.0     60.0     0 %      0         34.0     29.3 ms
+ 30  APA102 .251          30.0     30.0     0 %      0         30.0     12.2 ms
+ 30  Teensy .253          30.0     30.0     0 %      0         30.0     29.3 ms
+```
+
+.251 before the fix (H-INST1): 3-4 % loss, ~1 incomplete frame/s, 56-57 fps at the LEDs.
+After: 0.9 % loss, 0.08 incomplete/s, 58.2 fps at the LEDs; `rxQueueDrops` 0,
+`rxSocketErrors` 0, `droppedPackets` 0, `sequenceErrors` 0 - the firmware queue no longer
+loses anything, the remaining loss happens below the socket (Wi-Fi / lwIP).
+Acceptance (>= 99.9 % packets, >= 59.5 complete frames/s): just missed (99.1 %, 59.48).
