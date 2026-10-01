@@ -25,7 +25,7 @@ Dort lässt sich alles aus diesem Dokument ohne Texteditor und **ohne Neustart**
 | LED-Anzahl am Controller geändert | beim Controller „Ausgänge vom Controller übernehmen“ |
 | Routen, Universes, Farben, FPS, Eingang | direkt in den Tabellen/Feldern |
 | Prüfen | Knopf **Prüfen** (zeigt Fehler und die geplante Ausgabe) |
-| Aktivieren | **Übernehmen & speichern** – wirkt sofort, die vorige Datei wird in `configackups\` gesichert (die letzten 20) |
+| Aktivieren | **Übernehmen & speichern** – wirkt sofort, die vorige Datei wird im Unterordner `config/backups` gesichert (die letzten 20) |
 | Verdrahtung/Ausgabe testen | Abschnitt **Testmuster** (Lauflicht, Port-ID, Regenbogen, Weiß, Schwarz) – PXLBLZ übernimmt danach automatisch wieder |
 | Kontrolle | jede Controller-Karte zeigt live „Router sendet … fps“ und „Controller meldet … vollständig/s · … unvollständig/s“ |
 
