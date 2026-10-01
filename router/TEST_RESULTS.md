@@ -412,3 +412,21 @@ After: 0.9 % loss, 0.08 incomplete/s, 58.2 fps at the LEDs; `rxQueueDrops` 0,
 `rxSocketErrors` 0, `droppedPackets` 0, `sequenceErrors` 0 - the firmware queue no longer
 loses anything, the remaining loss happens below the socket (Wi-Fi / lwIP).
 Acceptance (>= 99.9 % packets, >= 59.5 complete frames/s): just missed (99.1 %, 59.48).
+
+### H-INST4 — router config 60 fps for all controllers, 3 x 60 s, 2026-10-02
+
+`routes.installation-live.json` (SchrankAll, 8683 px): `input.fps_target` and every
+`controllers[].fps_target` set to 60 and saved (backup `config/backups/routes.installation-live.20261002-055801.json`);
+controllers already at `targetFps` 60. `installation-fps-test.mjs --fps 60,60,60 --seconds 60`, rainbow,
+no other Art-Net sender. .244 not reachable.
+
+```text
+run  controller     router  complete  loss          incompl/s  LED out  output
+1-3  APA102 .251     60.0   59.4-59.5  0.83-1.00 %   0.13-0.21  58.0-58.5  12.2 ms
+1-3  Teensy .253     60.0   60.0       0-0.02 %      0          34.0       29.3 ms
+```
+
+Router and wired network: loss-free at 60 fps. .251: remaining ~0.9 % lost below the firmware
+queue (`rxQueueDrops` 0) - Wi-Fi / lwIP. .253: 34 fps at the LEDs, limited by the 880-LED lane.
+Diagnostics differ between firmwares (Teensy ~90 status fields, ESP32 21) - alignment task:
+`docs/FIRMWARE_DIAGNOSE_ANGLEICH_PROMPT.md`.

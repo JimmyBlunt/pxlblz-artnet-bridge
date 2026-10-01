@@ -63,6 +63,11 @@ Fix prepared: [`docs/ESP_FIRMWARE_RX_FIX_PROMPT.md`](../docs/ESP_FIRMWARE_RX_FIX
 (own receive task on core 0). Router-side double send / packet pacing were measured and do
 not help.
 
+**Update 2026-10-02:** .251 and .248 run the receive-task firmware (`rxQueueDrops` etc.). At
+60 fps .251 now loses ~0.9 % (was 3-4 %), ~58 fps at the LEDs (`router/TEST_RESULTS.md`
+H-INST3/H-INST4). The ESP32 `/api/status` has far fewer diagnostic fields than the Teensy;
+alignment task: [`docs/FIRMWARE_DIAGNOSE_ANGLEICH_PROMPT.md`](../docs/FIRMWARE_DIAGNOSE_ANGLEICH_PROMPT.md).
+
 ## ESP test rig 10.0.0.248
 
 One APA102 chain on output 6 (U149): 8x8 matrix (px 0-63) then DotStar FeatherWing 12x6
