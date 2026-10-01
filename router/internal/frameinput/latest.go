@@ -19,6 +19,7 @@ type LatestFrame struct {
 	replaced  atomic.Uint64
 	invalid   atomic.Uint64
 	lastUnix  atomic.Int64
+	badLen    atomic.Int64 // byte length of the last rejected frame
 }
 
 type Stats struct {
@@ -26,6 +27,9 @@ type Stats struct {
 	Replaced  uint64
 	Invalid   uint64
 	LastAt    time.Time
+	// LastInvalidLen is the byte length of the most recently rejected frame
+	// (0 = none or rejected without a length).
+	LastInvalidLen int
 }
 
 func NewLatestFrame(size int) (*LatestFrame, error) {
@@ -52,10 +56,12 @@ func (l *LatestFrame) Submit(frame []byte) error {
 	if l.variable.Load() {
 		if len(frame) == 0 || len(frame)%3 != 0 {
 			l.invalid.Add(1)
+			l.badLen.Store(int64(len(frame)))
 			return fmt.Errorf("frame length %d must contain complete RGB pixels", len(frame))
 		}
 	} else if len(frame) != len(l.buf) {
 		l.invalid.Add(1)
+		l.badLen.Store(int64(len(frame)))
 		return fmt.Errorf("frame length %d, expected %d", len(frame), len(l.buf))
 	}
 	l.mu.Lock()
@@ -96,10 +102,11 @@ func (l *LatestFrame) Stats() Stats {
 		t = time.Unix(0, n)
 	}
 	return Stats{
-		Submitted: l.submitted.Load(),
-		Replaced:  l.replaced.Load(),
-		Invalid:   l.invalid.Load(),
-		LastAt:    t,
+		Submitted:      l.submitted.Load(),
+		Replaced:       l.replaced.Load(),
+		Invalid:        l.invalid.Load(),
+		LastAt:         t,
+		LastInvalidLen: int(l.badLen.Load()),
 	}
 }
 

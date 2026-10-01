@@ -122,6 +122,10 @@ function routerPageUrl(): string {
 interface RouterStatusDoc {
   uptime_s: number
   rx_frames: number
+  rx_invalid?: number
+  pixel_count?: number
+  variable_size?: boolean
+  last_invalid_pixels?: number
   ws_clients: number
   controllers?: { name: string; target_ip: string; stale: boolean }[]
   test_pattern?: string
@@ -181,8 +185,23 @@ function startArtNetBadge(): void {
       const st = (await res.json()) as RouterStatusDoc
       const dt = prev ? st.uptime_s - prev.uptime_s : 0
       const fps = prev && dt > 0 && st.rx_frames >= prev.rx_frames ? (st.rx_frames - prev.rx_frames) / dt : null
+      const rejected = prev && dt > 0 && (st.rx_invalid ?? 0) > (prev.rx_invalid ?? 0)
+        ? ((st.rx_invalid ?? 0) - (prev.rx_invalid ?? 0)) / dt : 0
       prev = st
       const ctrls = st.controllers ?? []
+      if (rejected > 1 && (fps === null || fps < 1)) {
+        // The router drops every frame: almost always the pattern's pixel count
+        // differs from the router config (PXLBLZ keeps a pixel count per pattern,
+        // a custom map does not override it).
+        const sent = st.last_invalid_pixels
+        const want = st.pixel_count
+        set('#ff6b6b',
+          sent && want ? `Router verwirft Bilder: ${sent} Pixel statt ${want}` : 'Router verwirft Bilder (falsche Größe)',
+          want
+            ? `Der Router erwartet genau ${want} Pixel pro Bild.\nIm Pattern die Pixelzahl auf ${want} stellen (Pixelzahl-Feld der Vorschau), oder in den Router-Einstellungen „jede Pixelzahl annehmen“ einschalten (fehlende Pixel bleiben dann schwarz).`
+            : 'Pixelzahl des Patterns und der Router-Config prüfen.')
+        return
+      }
       const parts = [
         fps === null ? 'Router ✓' : `${fps.toFixed(0)} Bilder/s`,
         `${ctrls.length} Controller`,

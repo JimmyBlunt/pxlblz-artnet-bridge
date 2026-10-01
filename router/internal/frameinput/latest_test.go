@@ -42,6 +42,9 @@ func TestLatestFrameRejectsWrongSize(t *testing.T) {
 	if l.Stats().Invalid != 1 {
 		t.Fatalf("invalid=%d", l.Stats().Invalid)
 	}
+	if l.Stats().LastInvalidLen != 2 {
+		t.Fatalf("last invalid len=%d, want 2", l.Stats().LastInvalidLen)
+	}
 }
 
 func TestVariableSizeTruncatesPadsAndRejectsPartialPixels(t *testing.T) {

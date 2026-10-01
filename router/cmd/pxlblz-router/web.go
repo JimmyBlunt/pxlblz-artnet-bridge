@@ -55,19 +55,25 @@ type remoteCache struct {
 }
 
 type statusDoc struct {
-	Version     string                       `json:"version"`
-	UptimeSec   float64                      `json:"uptime_s"`
-	Input       string                       `json:"input"`
-	RXFrames    uint64                       `json:"rx_frames"`
-	RXReplaced  uint64                       `json:"rx_replaced"`
-	RXInvalid   uint64                       `json:"rx_invalid"`
-	LastFrameMS *float64                     `json:"last_frame_age_ms"`
-	WSClients   int64                        `json:"ws_clients"`
-	Controllers []scheduler.ControllerStatus `json:"controllers"`
-	ConfigPath  string                       `json:"config_path"`
-	AppliedAt   string                       `json:"config_applied_at"`
-	Test        string                       `json:"test_pattern,omitempty"`
-	TestLeftSec float64                      `json:"test_left_s,omitempty"`
+	Version    string  `json:"version"`
+	UptimeSec  float64 `json:"uptime_s"`
+	Input      string  `json:"input"`
+	RXFrames   uint64  `json:"rx_frames"`
+	RXReplaced uint64  `json:"rx_replaced"`
+	RXInvalid  uint64  `json:"rx_invalid"`
+	// PixelCount / VariableSize: what input frames must look like; with
+	// variable_size false only frames of exactly PixelCount pixels are taken.
+	PixelCount   int  `json:"pixel_count"`
+	VariableSize bool `json:"variable_size"`
+	// LastInvalidPixels: pixel count of the last rejected frame (0 = none).
+	LastInvalidPixels int                          `json:"last_invalid_pixels,omitempty"`
+	LastFrameMS       *float64                     `json:"last_frame_age_ms"`
+	WSClients         int64                        `json:"ws_clients"`
+	Controllers       []scheduler.ControllerStatus `json:"controllers"`
+	ConfigPath        string                       `json:"config_path"`
+	AppliedAt         string                       `json:"config_applied_at"`
+	Test              string                       `json:"test_pattern,omitempty"`
+	TestLeftSec       float64                      `json:"test_left_s,omitempty"`
 }
 
 // startWeb serves the status endpoint (as before), the configuration page and
@@ -164,15 +170,18 @@ func (s *webServer) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	latest := s.eng.Latest()
 	ist := latest.Stats()
 	doc := statusDoc{
-		Version:     version,
-		UptimeSec:   time.Since(s.start).Seconds(),
-		Input:       s.eng.Mode(),
-		RXFrames:    ist.Submitted,
-		RXReplaced:  ist.Replaced,
-		RXInvalid:   ist.Invalid,
-		Controllers: s.eng.Scheduler().Status(),
-		ConfigPath:  s.configPath,
-		AppliedAt:   s.eng.AppliedAt().Format(time.RFC3339),
+		Version:           version,
+		UptimeSec:         time.Since(s.start).Seconds(),
+		Input:             s.eng.Mode(),
+		RXFrames:          ist.Submitted,
+		RXReplaced:        ist.Replaced,
+		RXInvalid:         ist.Invalid,
+		PixelCount:        latest.Size() / 3,
+		VariableSize:      s.eng.Config().Input.VariableSize,
+		LastInvalidPixels: ist.LastInvalidLen / 3,
+		Controllers:       s.eng.Scheduler().Status(),
+		ConfigPath:        s.configPath,
+		AppliedAt:         s.eng.AppliedAt().Format(time.RFC3339),
 	}
 	if !ist.LastAt.IsZero() {
 		age := float64(time.Since(ist.LastAt).Microseconds()) / 1000
