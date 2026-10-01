@@ -5,7 +5,7 @@
     "pixel_count": 5534,
     "fps_target": 60,
     "stale_timeout_ms": 1000,
-    "on_stale": "blackout",
+    "on_stale": "stop",
     "variable_size": true
   },
   "artnet": {

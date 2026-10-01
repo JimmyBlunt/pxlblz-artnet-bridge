@@ -154,6 +154,10 @@ Beispiel (Testumgebung: eine APA102-Kette 8×8 + FeatherWing 12×6):
 - `stale_timeout_ms` / `on_stale` – was passiert, wenn PXLBLZ aufhört zu senden
   (Tab im Hintergrund, Studio geschlossen): `hold` letztes Bild halten,
   `blackout` schwarz senden, `stop` nichts mehr senden.
+  **Für die Installation `stop` verwenden**, wenn dieselben Controller auch von
+  TouchDesigner (oder einem anderen Art-Net-Programm) bespielt werden: Mit `blackout`/`hold`
+  sendet der Router ohne PXLBLZ weiter (60× pro Sekunde), die Controller bekommen dann
+  abwechselnd Bilder von beiden Sendern – alle Panels blitzen und flackern.
 
 **`controllers[]`** – ein Eintrag pro Art-Net-Gerät
 - `name` – frei wählbar, eindeutig.
@@ -316,6 +320,7 @@ E:\PXLBLZ-ArtNet\artnet\pxlblz-router.exe --config <datei> --input pattern --pat
 | Router `ws_clients` = 0 | Studio nicht offen oder mit falscher `pxoutUrl` | Desktop-Verknüpfung erneut starten |
 | Bild gespiegelt / zeilenweise versetzt | Map passt nicht zur Verkabelung | `flipX` / `flipY` / `serpentine` in der Map; Lauflicht-Test |
 | Mit einem Pattern laufen die LEDs, mit einem anderen bei **derselben Map** nicht; Anzeige unten links rot „Router verwirft Bilder: N Pixel statt M“ | PXLBLZ speichert die **Pixelzahl pro Pattern**; eine Custom-Map ändert sie nicht. Das Pattern sendet N Pixel, die Router-Config erwartet genau M | Im Pattern die Pixelzahl (Pixelzahl-Feld der Vorschau) auf M stellen und speichern – oder auf der Einstellungsseite „jede Pixelzahl annehmen“ einschalten (fehlende Pixel bleiben schwarz). `/status` zeigt `pixel_count` und `last_invalid_pixels` |
+| Alle Panels blitzen/flackern, sobald TouchDesigner (oder ein anderes Art-Net-Programm) ausgibt | **Zwei Sender** an denselben Controllern: der Router sendet weiter (PXLBLZ aktiv, oder ohne PXLBLZ mit `on_stale` `blackout`/`hold`) | Immer nur eine Quelle: PXLBLZ-Tab schließen bzw. Ausgabe aus, wenn TouchDesigner spielt (und umgekehrt); in der Router-Config `on_stale: "stop"` – dann sendet der Router 1 s nach dem letzten PXLBLZ-Bild nichts mehr. Prüfen: `/status` → `controllers[].packets` steigt nicht mehr |
 | Falsche Farben | Farbreihenfolge doppelt umsortiert | Am Controller die Reihenfolge des LED-Typs, im Router `RGB` |
 | Klick auf **PXLBLZ-IDE - ArtNet**, aber kein Startfenster erscheint | Windows hat das Skript gar nicht gestartet | `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\launch-history.log` prüfen (jeder Start steht dort als erste Zeile); Startmenü-Eintrag „PXLBLZ-IDE ArtNet“ versuchen |
 | Startfenster bleibt mit FEHLER stehen | eine Startprüfung ist fehlgeschlagen | Meldung lesen; Details in `artnet-start-status.txt` und den Logs im selben Ordner |
