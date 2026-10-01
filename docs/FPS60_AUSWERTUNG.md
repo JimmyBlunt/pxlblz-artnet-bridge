@@ -72,3 +72,13 @@ Router-seitig ausprobiert und **ohne Wirkung** (wieder entfernt):
    Hardware, nur mit Umverkabelung.
 4. PXLBLZ muss selbst 60 fps rendern: das Studio-Fenster im Vordergrund lassen (die Statusleiste
    „ArtNet · … Bilder/s“ zeigt es).
+
+## Umgesetzt (2026-10-01, Sofortmaßnahmen)
+
+- Router: alle drei Controller `fps_target` 60 (gespeichert, Config im Repo nachgezogen).
+- .251: Ziel-FPS 60 übernommen und gespeichert (vorherige Config gesichert in
+  `PXLBLZ_ArtNet_Handoff_2026-09-26\esp-config-backup\esp-10.0.0.251-config-before-fps60-2026-10-01.json`).
+
+Kontrollmessung danach (Regenbogen, 20 s): ESP .248 **59,5 fps** an den LEDs, Teensy .253 60,0 fps
+vollständig empfangen / 30,0 fps an den LEDs (bis Option A–D), APA .251 **56,2 fps** an den LEDs
+(4,3 % WLAN-Verlust).
