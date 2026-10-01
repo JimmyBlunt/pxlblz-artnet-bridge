@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "input": {
+    "pixel_count": 512,
+    "fps_target": 60
+  },
+  "artnet": {
+    "udp_port": 6454,
+    "unicast": true
+  },
+  "routes": []
+}

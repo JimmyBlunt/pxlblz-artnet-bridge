@@ -14,14 +14,15 @@ import (
 	"pxlblz-router/internal/wsmini"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 func main() {
 	configPath := flag.String("config", "config/routes.loopback.json", "configuration used for pixel_count and port-id route ranges")
 	target := flag.String("ws", "127.0.0.1:9980", "router websocket host:port")
 	path := flag.String("path", "/pixels", "router websocket path")
 	patternName := flag.String("pattern", "rainbow", "port-id|rainbow|chase|index|red|green|blue|white|black")
-	fps := flag.Int("fps", 60, "input frame rate")
+	fps := flag.Int("fps", 60, "transport frame rate")
+	patternFPS := flag.Int("pattern-fps", 0, "animation frame rate (0 = same as transport fps)")
 	duration := flag.Duration("duration", 10*time.Second, "run duration (0 = until Ctrl-C)")
 	flag.Parse()
 
@@ -30,13 +31,27 @@ func main() {
 	if *fps < 1 || *fps > 240 {
 		fatal(fmt.Errorf("fps must be 1..240"))
 	}
+	if *patternFPS < 0 || *patternFPS > 240 {
+		fatal(fmt.Errorf("pattern-fps must be 0..240"))
+	}
+	effectivePatternFPS := *patternFPS
+	if effectivePatternFPS == 0 {
+		effectivePatternFPS = *fps
+	}
 
 	c, err := wsmini.Dial(*target, *path)
 	fatal(err)
 	defer c.Close()
 
 	fmt.Printf("PXLBLZ Frame Sender v%s -> ws://%s%s\n", version, *target, *path)
-	fmt.Printf("Pixels: %d (%d bytes/frame) | input FPS: %d | pattern: %s\n", cfg.Input.PixelCount, cfg.Input.PixelCount*3, *fps, *patternName)
+	fmt.Printf(
+		"Pixels: %d (%d bytes/frame) | transport FPS: %d | pattern FPS: %d | pattern: %s\n",
+		cfg.Input.PixelCount,
+		cfg.Input.PixelCount*3,
+		*fps,
+		effectivePatternFPS,
+		*patternName,
+	)
 
 	frame := make([]byte, cfg.Input.PixelCount*3)
 	ticker := time.NewTicker(time.Second / time.Duration(*fps))
@@ -55,10 +70,11 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
+			patternFrame := n * uint64(effectivePatternFPS) / uint64(*fps)
 			if strings.EqualFold(*patternName, "port-id") {
-				err = pattern.FillPortID(frame, cfg.Input.PixelCount, cfg.Routes, n)
+				err = pattern.FillPortID(frame, cfg.Input.PixelCount, cfg.Routes, patternFrame)
 			} else {
-				err = pattern.Fill(frame, cfg.Input.PixelCount, *patternName, n)
+				err = pattern.Fill(frame, cfg.Input.PixelCount, *patternName, patternFrame)
 			}
 			fatal(err)
 			fatal(c.SendBinary(frame))

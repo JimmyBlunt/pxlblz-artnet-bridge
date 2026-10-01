@@ -78,7 +78,9 @@ pxlblz-integration/
   tools/                       local D1 import / identity seed for the local IDE
   install-pxlblz-output.ps1, virtual-test/
 
-windows-launcher-artnet/     desktop starter (router + local PXLBLZ IDE)
+windows-launcher-artnet/     desktop starter (Art-Net router + local PXLBLZ IDE) - used by the installation
+windows-launcher/            Fadecandy desktop starter (pxlblz-fadecandy + local PXLBLZ IDE)
+fadecandy/                   Fadecandy / L3D OPC output (separate Go module)
 perf-test/                   hardware ramp + installation FPS test through the router API
 ```
 
@@ -152,3 +154,14 @@ confirmed.
 Note: this "known" config predates the 2026-10-02 hardware verification and is
 kept for the virtual gates. The running installation is described by
 `routes.installation-live.json` (see above), where .251 is the APA102 controller (RGB).
+
+## Fadecandy / L3D output and Fadecandy desktop version
+
+`fadecandy/` is a separate Go module (`pxlblz-fadecandy`, OPC to fcserver) for the L3D 8x8x8
+cube; see [fadecandy/README.md](fadecandy/README.md).
+
+The reproducible **fadecandy-v0.1.1** snapshot includes the desktop starter, dedicated browser profile setup, local login, bridge checks and exact IDE integration source. See [installation and restore](windows-launcher/README.md) and [version notes](docs/versions/fadecandy-v0.1.1.md).
+
+The two desktop starters are independent: `windows-launcher-artnet/` starts the Art-Net router
+and is the one used for the LED installation; `windows-launcher/` starts the Fadecandy output.
+

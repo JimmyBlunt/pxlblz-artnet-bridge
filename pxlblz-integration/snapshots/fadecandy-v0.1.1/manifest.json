@@ -1,0 +1,24 @@
+{
+  "version": "fadecandy-v0.1.1",
+  "date": "2026-09-21",
+  "upstreamRepository": "https://github.com/jon-whiteroomsoftware/PXLBLZ-IDE.git",
+  "upstreamCommit": "d685125b34c694f311972e258efb48d12cf05cd8",
+  "bridgeBanner": "0.1.1-dev",
+  "files": [
+    {
+      "destination": "src/components/Preview.tsx",
+      "path": "Preview.tsx",
+      "sha256": "d5eb2e88c2383f6bfc174bddced6be88f8a38c724547074a149a84b8337ad31a"
+    },
+    {
+      "destination": "src/engine/externalPixelOutput.ts",
+      "path": "externalPixelOutput.ts",
+      "sha256": "1eb724c0cbc1bed76554ff6b196d84957d1b6a7a21e4d6039b112d976d9bfd15"
+    }
+  ],
+  "fcserver": {
+    "source": "https://raw.githubusercontent.com/rewolff/fadecandy/de7f94a052579b3cea1dc81e17231be469f1603a/bin/fcserver.exe",
+    "sha256": "537010af1a30ebf14335ba72b4c48aa4fe4327af1ea21a4f25fe2640dc1c56c2"
+  },
+  "browserProfile": "Created locally at %LOCALAPPDATA%/PXLBLZ-IDE/BrowserProfile; contents are not versioned"
+}

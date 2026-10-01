@@ -1,0 +1,3 @@
+# Exact live snapshots retain their existing CRLF and trailing blank lines.
+*.tsx -text whitespace=cr-at-eol,-blank-at-eof
+*.ts -text whitespace=cr-at-eol,-blank-at-eof

@@ -122,7 +122,22 @@ function markArtNetTitle(enabled: boolean): void {
   if (enabled) document.title = ARTNET_TITLE
   else if (document.title === ARTNET_TITLE) document.title = 'PXLBLZ-IDE'
 }
-markArtNetTitle(queryEnabled())
+
+// The same adapter also feeds the Fadecandy/L3D daemon (pxlblz-fadecandy on
+// ws://127.0.0.1:9981/pixels). That target has no Art-Net router status page,
+// so the Art-Net title and badge are only used for other targets (default
+// 9980), or when ?pxoutStatus= names a status page explicitly.
+const FADECANDY_WS_PORT = '9981'
+function isArtNetTarget(): boolean {
+  if (typeof window === 'undefined') return false
+  if (new URLSearchParams(window.location.search).get('pxoutStatus')?.trim()) return true
+  try {
+    return new URL(queryUrl()).port !== FADECANDY_WS_PORT
+  } catch {
+    return true
+  }
+}
+markArtNetTitle(queryEnabled() && isArtNetTarget())
 
 // --- Art-Net status badge ---------------------------------------------------
 // A small collapsible badge (bottom left) in the output-enabled tab: router
@@ -242,12 +257,12 @@ function startArtNetBadge(): void {
   if (document.body) mount()
   else document.addEventListener('DOMContentLoaded', mount, { once: true })
 }
-if (queryEnabled()) startArtNetBadge()
+if (queryEnabled() && isArtNetTarget()) startArtNetBadge()
 
 export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutput {
   const enabled = queryEnabled()
   const url = queryUrl()
-  markArtNetTitle(enabled)
+  markArtNetTitle(enabled && isArtNetTarget())
 
   if (!enabled) {
     return {
