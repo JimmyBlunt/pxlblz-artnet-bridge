@@ -1,87 +1,60 @@
 # Known Installation Topology
 
-This file separates **verified router routes** from other known installation routes that still need router hardware verification.
+Current, verified state of every controller (IPs, outputs, universes, firmware, measured
+FPS): **[`controller-reference/INSTALLATION_CONTROLLERS.md`](../controller-reference/INSTALLATION_CONTROLLERS.md)**.
+Running router config: `router/config/routes.installation-live.json`.
 
-## Logical frame
+## Verified on hardware (2026-10-02, port-id colors OK)
 
-Current full logical frame:
+| Controller | IP | Universes | LEDs | Router color order |
+| --- | --- | --- | --- | --- |
+| Teensy41 Octo WS2812B back panels | 10.0.0.253 | U120-U152 without U138 (8 outputs) | 4593 | RGB |
+| ESP32 flex8 APA102 back panels | 10.0.0.251 | U156-U161 (2 outputs) | 805 | RGB |
+| ESP32 APA102 test rig | 10.0.0.248 | U149 | 136 | RGB |
 
-```text
-pixels 0..8185
-8186 pixels total
-24558 RGB bytes
-```
+Changes against the earlier notes below: the Teensy now has **8** outputs enabled
+(OUT8 488 LEDs at U150-U152, 32 universes); OUT6 is 610 LEDs. .251's second output has
+**549** LEDs (not 540) and the router sends **RGB** (not BGR) - the firmware reorders.
 
----
+### Pixel layout
 
-## BACK_PANEL_249 — VERIFIED
-
-```text
-IP: 10.0.0.253
-Art-Net UDP: 6454
-Color order: RGB
-Target FPS used during successful tests: 30
-7 electrical outputs
-6 physical panels
-```
+`routes.installation-live.json` places the controllers **sequentially** in the PXLBLZ frame:
 
 ```text
-P1  1440..1642  203 LEDs  U120..U121
-P2  3744..4481  738 LEDs  U122..U126
-P3  4482..5361  880 LEDs  U127..U132
-P4  5362..6171  810 LEDs  U133..U137
-P5  6172..6523  352 LEDs  U139..U141
-P6  6524..7133  610 LEDs  U142..U145
-P7  7134..7645  512 LEDs  U146..U149
+ESP test rig   pixels    0..135
+Teensy .253    pixels  136..4728   (OUT1..OUT8 in order)
+APA102 .251    pixels 4729..5533   (OUT0, OUT1)
+5534 pixels total
 ```
 
-P6 and P7 together form one physical Panel 6.
+This layout is what the router test patterns and the ESP test map use. A PXLBLZ map for
+the real installation must produce its points in exactly this order (or the routes'
+`pixel_start` values must be changed to match the map).
 
----
+## Historical logical frame (earlier TouchDesigner/Pixelblaze mapping)
 
-## WS2812_NODE — KNOWN FROM PRIOR INSTALLATION CONFIG, ROUTER VERIFICATION PENDING
+`router/config/routes.installation-full.json` and the 2026-09 BACK_PANEL_249 tests used an
+8186-pixel logical frame with these source ranges:
 
 ```text
-IP: 10.0.0.244
-Color order: GRB
-Existing target rate: ~60 FPS
+10.0.0.244  P1    0..516   517 LEDs  U0..U3      GRB   (not yet connected to the router)
+            P2  517..785   269 LEDs  U6..U7
+            P3  786..1183  398 LEDs  U12..U14
+10.0.0.251  P1 2720..2975  256 LEDs  U156..U157
+            P2 7646..8185  540 LEDs  U158..U161  (now 549 LEDs)
+10.0.0.253  P1 1440..1642  203 LEDs  U120..U121
+            P2 3744..4481  738 LEDs  U122..U126
+            P3 4482..5361  880 LEDs  U127..U132
+            P4 5362..6171  810 LEDs  U133..U137
+            P5 6172..6523  352 LEDs  U139..U141
+            P6 6524..7133  610 LEDs  U142..U145
+            P7 7134..7645  512 LEDs  U146..U149
+            (P6 + P7 = one physical panel; OUT8 was disabled then)
 ```
 
-```text
-P1  0..516      517 LEDs  U0..U3
-P2  517..785    269 LEDs  U6..U7
-P3  786..1183   398 LEDs  U12..U14
-```
+Keep it as reference for the original mapping; it is not the running config.
 
-The universe gaps are intentional in the existing configuration.
+## Still to confirm
 
----
-
-## PANEL8_251 — KNOWN FROM PRIOR INSTALLATION CONFIG, ROUTER VERIFICATION PENDING
-
-```text
-IP: 10.0.0.251
-Color order: BGR
-Existing target rate: ~30 FPS
-```
-
-```text
-P1  2720..2975  256 LEDs  U156..U157
-P2  7646..8185  540 LEDs  U158..U161
-```
-
----
-
-## APA102 / ESP controller — TO BE CONFIRMED
-
-A separate APA102 controller exists in the installation.
-
-Before adding it to the production router config, confirm:
-
-- IP address
-- logical source pixel range(s)
-- physical output/lane count
-- universe or alternative protocol layout
-- color order
-- practical output FPS
-- brightness policy
+- **10.0.0.244** WS2812 node: IP, universes and color order from the earlier installation
+  config; router hardware verification pending.

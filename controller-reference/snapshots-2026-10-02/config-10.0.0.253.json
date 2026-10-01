@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "hardwareProfile": "PJRC_OCTO_ADAPTER_T41",
+  "brightness": 255,
+  "targetFps": 60,
+  "pixelCount": 4593,
+  "universeCount": 32,
+  "network": {
+    "dhcp": true,
+    "ip": "0.0.0.0",
+    "netmask": "255.255.255.0",
+    "gateway": "0.0.0.0",
+    "dns": "0.0.0.0"
+  },
+  "outputs": [
+    {
+      "id": 0,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 203,
+      "startUniverse": 120,
+      "dataPin": 2,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 0,
+      "targetFps": 60
+    },
+    {
+      "id": 1,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 738,
+      "startUniverse": 122,
+      "dataPin": 14,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 203,
+      "targetFps": 60
+    },
+    {
+      "id": 2,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 880,
+      "startUniverse": 127,
+      "dataPin": 7,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 941,
+      "targetFps": 60
+    },
+    {
+      "id": 3,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 810,
+      "startUniverse": 133,
+      "dataPin": 8,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 1821,
+      "targetFps": 60
+    },
+    {
+      "id": 4,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 352,
+      "startUniverse": 139,
+      "dataPin": 6,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 2631,
+      "targetFps": 60
+    },
+    {
+      "id": 5,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 610,
+      "startUniverse": 142,
+      "dataPin": 20,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 2983,
+      "targetFps": 60
+    },
+    {
+      "id": 6,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 512,
+      "startUniverse": 146,
+      "dataPin": 21,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 3593,
+      "targetFps": 60
+    },
+    {
+      "id": 7,
+      "type": "WS2812B",
+      "enabled": true,
+      "pixelCount": 488,
+      "startUniverse": 150,
+      "dataPin": 5,
+      "clockPin": -1,
+      "colorOrder": "GRB",
+      "reverse": false,
+      "startPixel": 4105,
+      "targetFps": 60
+    }
+  ]
+}

@@ -36,15 +36,20 @@ exactly as in the Fadecandy setup. Nothing is synchronised with GitHub or the on
 4. `npm ci` in both IDE folders (set `npm_config_cache` to a drive with space if C: is full).
 5. In `PXLBLZ-IDE-main`: create `.dev.vars` from `.dev.vars.example` with a long random
    `SESSION_SECRET` (OAuth fields stay empty), copy it to `PXLBLZ-IDE`, run
-   `npm run db:migrate:local`, then seed the upstream local identities with
-   `localIdentitySeedSql(dev-runtime.json)` from `scripts/dev-runtime-auth.ts` via
-   `wrangler d1 execute pxlblz-ide --local --file <seed.sql>`.
+   `npm run db:migrate:local`, then seed the upstream local identities
+   (`localIdentitySeedSql(dev-runtime.json)` from `scripts/dev-runtime-auth.ts`) with
+   `npx tsx <bridge>\pxlblz-integration\tools\seed-local-identity.mts seed.sql` and
+   `npx wrangler d1 execute pxlblz-ide --local --file seed.sql`. Maps/patterns from the repo
+   can be imported with `tools\local-d1-import.mts` (see `pxlblz-integration/README.md`).
 6. Build the router (or use a v0.3 test build) and install:
 
 ```powershell
 .\windows-launcher-artnet\Install-DesktopShortcut.ps1 -WorkspaceRoot 'E:\PXLBLZ-ArtNet' `
-    -RouterBinDirectory '<folder with pxlblz-router.exe>' -RouterConfig 'config\routes.esp-test-172.json'
+    -RouterBinDirectory '<folder with pxlblz-router.exe>' -RouterConfig 'config\routes.installation-live.json'
 ```
+
+`routes.installation-live.json` is the whole verified installation (ESP test rig .248,
+Teensy .253, APA102 .251); `routes.esp-test-172-8x8-12x6.json` drives the test rig alone.
 
 Double-click **PXLBLZ-IDE - ArtNet** on the desktop (also in the Start menu folder
 **PXLBLZ-IDE ArtNet**). A small window "PXLBLZ-IDE~ArtNet wird gestartet ..." shows the

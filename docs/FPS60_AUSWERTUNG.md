@@ -98,9 +98,23 @@ vollständig empfangen / 30,0 fps an den LEDs (bis Option A–D), APA .251 **56,
   | .251 bei 30 fps (180/s) | 0,2 % |
   | .251 bei 60 fps (360/s) | ~4 % |
 
-  Typisch für den **WLAN-Stromsparmodus des ESP32** (Modem Sleep: der Access Point puffert und
-  liefert gebündelt, die kleinen Empfangspuffer laufen über). Abhilfe liegt in der **Firmware**
-  (`WiFi.setSleep(false)` / `esp_wifi_set_ps(WIFI_PS_NONE)`, mehr RX-Puffer) – Quellcode der
-  .251-Firmware liegt nicht im Repo – oder in einer Kabelverbindung.
+  Erste Vermutung war der WLAN-Stromsparmodus – `WiFi.setSleep(false)` ist in der Firmware aber
+  bereits gesetzt.
 
 Stand an den LEDs bei 60 fps: .248 **59,3**, .253 **34,1**, .251 **57,3** fps.
+
+### Nachtrag 2026-10-02: Ursache .251 in der Firmware gefunden
+
+Firmware-Quellen: https://github.com/JimmyBlunt/ArtNet-Controller-ESP-Teensy41
+(`firmware/esp32_artnet`, Env `esp32-wifi-esp251`). In `loop()` laufen Web-API, Art-Net-Empfang
+(`WiFiUDP::parsePacket`, max. 32 pro Durchlauf) und `outputs.show()` nacheinander. `show()`
+blockiert 12,4 ms (APA102 fest auf `DATA_RATE_MHZ(4)`); in der Zeit läuft die kleine
+lwIP-Empfangswarteschlange bei 6 Paketen/Frame über – der Stack verwirft, die Firmware zählt es
+nicht. Abhilfe: eigener Empfangs-Task auf Core 0 mit Queue an `loop()`, optional höhere SPI-Rate.
+Fertiger Auftrag für den Firmware-PC: [`ESP_FIRMWARE_RX_FIX_PROMPT.md`](ESP_FIRMWARE_RX_FIX_PROMPT.md).
+Abnahme nach dem Flashen mit `perf-test/installation-fps-test.mjs --fps 60`: .251 ≥ 99,9 %
+Pakete, ≥ 59,5 vollständige Frames/s.
+
+Port-ID-Test (jeder Ausgang in seiner Portfarbe) auf .253 und .251: Universes und Farbreihenfolge
+korrekt. Aktive Router-Config der Installation: `router/config/routes.installation-live.json`
+(Controller-Übersicht: `controller-reference/INSTALLATION_CONTROLLERS.md`).

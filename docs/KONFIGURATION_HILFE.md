@@ -87,7 +87,7 @@ angepasst – an PXLBLZ und an der Map ändert sich nichts.
 | Bildrate an den Controller | Router-Config: `controllers[].fps_target` | `60` |
 | Bildrate an die LEDs | Controller: Ziel-FPS (`targetFps`) | `60` |
 | Farbreihenfolge (RGB/GRB/BGR …) | **Controller** (Ausgang → Farbreihenfolge); Router dann `RGB` | Controller `BGR`, Router `RGB` |
-| Welche Router-Config der Starter benutzt | `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\launcher-config.json` → `routerConfig` | `config\routes.esp-test-172-8x8-12x6.json` |
+| Welche Router-Config der Starter benutzt | `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\launcher-config.json` → `routerConfig` | `config\routes.installation-live.json` |
 | Router-Eingang (WebSocket) | fest im Starter: `127.0.0.1:9980` | – |
 | Wohin PXLBLZ sendet | Studio-URL `pxoutUrl=…` (setzt der Starter automatisch) | `ws://127.0.0.1:9980/pixels` |
 
@@ -108,10 +108,13 @@ angepasst – an PXLBLZ und an der Map ändert sich nichts.
 Die Datei, die der Starter benutzt, liegt im Workspace:
 
 ```text
-E:\PXLBLZ-ArtNet\artnet\config\routes.esp-test-172-8x8-12x6.json
+E:\PXLBLZ-ArtNet\artnet\config\routes.installation-live.json
 ```
 
-Beispiel (aktuelle Testumgebung: eine APA102-Kette 8×8 + FeatherWing 12×6):
+Seit 2026-10-02 ist das die ganze Installation (ESP-Testrig, Teensy .253, APA102 .251, siehe
+Abschnitt 9). Für nur den Testaufbau: `routes.esp-test-172-8x8-12x6.json`.
+
+Beispiel (Testumgebung: eine APA102-Kette 8×8 + FeatherWing 12×6):
 
 ```json
 {
@@ -327,7 +330,32 @@ E:\PXLBLZ-ArtNet\artnet\pxlblz-router.exe --config <datei> --input pattern --pat
 | Controller | ESP32 `esp32-wroom-flex-8ws-2apa`, **10.0.0.248** (vorher 172.20.10.2 am Hotspot) |
 | Aktiver Ausgang | Ausgang 6, APA102, **136 LEDs**, Universe **149**, Ziel 60 FPS; Ausgang 0 deaktiviert |
 | Kette | 8×8-Matrix (Pixel 0–63) → DotStar FeatherWing 12×6 (Pixel 64–135), beide von unten links, zeilenweise ohne Zickzack; 8×8 rechtsbündig unter der FeatherWing |
-| Router-Config | `router/config/routes.esp-test-172-8x8-12x6.json` |
+| Router-Config | allein: `router/config/routes.esp-test-172-8x8-12x6.json`; in der Installation: Pixel 0–135 von `routes.installation-live.json` |
 | PXLBLZ-Map | `pxlblz-integration/maps/esp-test-8x8-12x6.js` (auch in der lokalen PXLBLZ-Datenbank) |
 | Pattern | `pxlblz-integration/patterns/snowflake-icesparkle-carpet-v06-esp-test.js` |
 | Sicherung der früheren Controller-Config | `PXLBLZ_ArtNet_Handoff_2026-09-26\esp-config-backup\` |
+
+---
+
+## 9. Installation (Stand 2026-10-02)
+
+Der Starter benutzt `config\routes.installation-live.json`. Alle Controller bekommen RGB mit
+60 fps; die Farbreihenfolge stellt jeder Controller selbst ein. Mit dem Port-ID-Test geprüft:
+jeder Ausgang leuchtet in seiner Portfarbe.
+
+| Controller | IP | PXLBLZ-Pixel | Universes | LEDs |
+| --- | --- | --- | --- | --- |
+| ESP-Testrig (APA102) | 10.0.0.248 | 0–135 | 149 | 136 |
+| Teensy 4.1 Octo Backpanels (WS2812B, 8 Ausgänge) | 10.0.0.253 | 136–4728 | 120–152 ohne 138 | 4593 |
+| ESP32 APA102 Backpanels (2 Ausgänge) | 10.0.0.251 | 4729–5533 | 156–161 | 805 |
+
+Details pro Ausgang, Firmware und APIs: `controller-reference/INSTALLATION_CONTROLLERS.md`;
+Stand der Controller-Configs: `controller-reference/snapshots-2026-10-02/`.
+
+- **Teensy .253:** Einstellungen nur im gestoppten Zustand ändern (`/api/stop` →
+  `/api/config` → `/api/save` → `/api/start`, Panels kurz dunkel). Vorher die Config sichern.
+- **APA102 .251 / ESP .248:** Übernehmen **und Speichern** (sonst nach Neustart weg).
+- Eine PXLBLZ-Map für die ganze Installation muss ihre Punkte in genau dieser Pixelreihenfolge
+  liefern (oder `pixel_start` in den Routen wird angepasst).
+- Bildraten an den LEDs und Grenzen: `docs/FPS60_AUSWERTUNG.md` (.253 ~34 fps wegen der
+  880-LED-Strangs, .251 ~57 fps bis zum Firmware-Fix).
