@@ -81,6 +81,17 @@ The installer expects the current upstream PXLBLZ Preview structure that was
 reviewed around commit `d685125b34c694f311972e258efb48d12cf05cd8`.
 It creates a backup of `Preview.tsx` before editing it.
 
+## Fixed pixel count for literal custom maps (`patches/`)
+
+PXLBLZ stores a pixel count **per pattern**; upstream, a user's custom map does not change it.
+A pattern last saved with 170 pixels therefore renders 170 pixels even on the 8683-point
+installation map, and the router (exact size) drops every frame.
+`patches/custom-map-fixed-count.patch` (applied by `install-pxlblz-output.ps1`) treats a
+custom map whose source is a **literal coordinate array** (`[[x,y,z], ...]`) like PXLBLZ's
+stock literal maps and its Show editor already do: the pixel count is fixed to the number of
+points (lock symbol in the Preview deck), for every pattern. Function-source maps keep the
+editable count.
+
 ## Tab title and status badge
 
 With output enabled the Studio tab is titled **PXLBLZ-IDE~ArtNet** and a small badge at the

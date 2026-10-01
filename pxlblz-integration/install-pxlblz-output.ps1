@@ -99,6 +99,20 @@ if ($text.Contains($cleanupAnchor)) {
 
 Set-Content -Path $preview -Value $text -Encoding utf8
 
+# Custom maps authored as a literal coordinate array get a fixed pixel count
+# (= their point count), like PXLBLZ's stock literal maps. Without it a pattern
+# keeps an old persisted count when such a map is selected and the router
+# rejects every frame. Idempotent: skipped when already applied.
+$fixedCountPatch = Join-Path $PSScriptRoot 'patches\custom-map-fixed-count.patch'
+& git -C $PxlblzPath apply --reverse --check $fixedCountPatch 2>$null
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "Patch already applied: custom-map-fixed-count"
+} else {
+  & git -C $PxlblzPath apply $fixedCountPatch
+  if ($LASTEXITCODE -ne 0) { throw "Patch custom-map-fixed-count.patch does not apply to $PxlblzPath" }
+  Write-Host "Patch applied: custom-map-fixed-count"
+}
+
 Write-Host ""
 Write-Host "PXLBLZ external pixel output installed."
 Write-Host "Backup: $backup"
