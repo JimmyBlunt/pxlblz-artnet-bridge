@@ -313,6 +313,8 @@ E:\PXLBLZ-ArtNet\artnet\pxlblz-router.exe --config <datei> --input pattern --pat
 | Router `ws_clients` = 0 | Studio nicht offen oder mit falscher `pxoutUrl` | Desktop-Verknüpfung erneut starten |
 | Bild gespiegelt / zeilenweise versetzt | Map passt nicht zur Verkabelung | `flipX` / `flipY` / `serpentine` in der Map; Lauflicht-Test |
 | Falsche Farben | Farbreihenfolge doppelt umsortiert | Am Controller die Reihenfolge des LED-Typs, im Router `RGB` |
+| Klick auf **PXLBLZ-IDE - ArtNet**, aber kein Startfenster erscheint | Windows hat das Skript gar nicht gestartet | `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\launch-history.log` prüfen (jeder Start steht dort als erste Zeile); Startmenü-Eintrag „PXLBLZ-IDE ArtNet“ versuchen |
+| Startfenster bleibt mit FEHLER stehen | eine Startprüfung ist fehlgeschlagen | Meldung lesen; Details in `artnet-start-status.txt` und den Logs im selben Ordner |
 | Starter meldet „Port 9980 gehört nicht zum erwarteten Router“ | ein anderer Router-Prozess läuft (z. B. ein Testmuster) | diesen Prozess beenden, Starter erneut |
 | Änderung an der Config wirkt nicht | Router läuft noch mit der alten Config | Router im Task-Manager beenden, Starter erneut |
 

@@ -74,21 +74,25 @@ foreach ($file in @('Start-PXLBLZ-ArtNet.ps1','Open-Local-IDE.mjs','Restore-IDEW
 }
 @{version='artnet-v0.3-dev'; workspaceRoot=$workspace; routerConfig=$RouterConfig} | ConvertTo-Json | Set-Content -LiteralPath $launcherConfigPath -Encoding UTF8
 if (-not $NoShortcut) {
-    New-Item -ItemType Directory -Path $DesktopDirectory -Force | Out-Null
-    $shortcutPath = Join-Path $DesktopDirectory 'PXLBLZ-IDE - ArtNet.lnk'
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $shortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $InstallDirectory 'Start-PXLBLZ-ArtNet.ps1') + '"'
-    $shortcut.WorkingDirectory = $InstallDirectory
-    $shortcut.Description = 'PXLBLZ Art-Net v0.3: IDE, lokalen Login und Art-Net-Router pruefen und starten'
-    $shortcut.WindowStyle = 7
-    $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,22"
-    $shortcut.Save()
-    Write-Output "Desktop-Verknuepfung: $shortcutPath"
-    # Second shortcut: the router's configuration page (works while the router runs).
-    $urlPath = Join-Path $DesktopDirectory 'PXLBLZ-ArtNet Einstellungen.url'
-    Set-Content -LiteralPath $urlPath -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:9988/`r`nIconFile=$env:SystemRoot\System32\shell32.dll`r`nIconIndex=21" -Encoding ASCII
-    Write-Output "Desktop-Verknuepfung: $urlPath"
+    # Desktop and Start menu: the starter (visible progress window, closes itself
+    # on success, stays open with the error otherwise) and the configuration page.
+    $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'PXLBLZ-IDE ArtNet'
+    foreach ($dir in @($DesktopDirectory, $startMenu)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $shortcutPath = Join-Path $dir 'PXLBLZ-IDE - ArtNet.lnk'
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $shortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $InstallDirectory 'Start-PXLBLZ-ArtNet.ps1') + '" -Interactive'
+        $shortcut.WorkingDirectory = $InstallDirectory
+        $shortcut.Description = 'PXLBLZ-IDE~ArtNet: IDE, lokalen Login und Art-Net-Router pruefen und starten'
+        $shortcut.WindowStyle = 1
+        $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,22"
+        $shortcut.Save()
+        Write-Output "Verknuepfung: $shortcutPath"
+        $urlPath = Join-Path $dir 'PXLBLZ-ArtNet Einstellungen.url'
+        Set-Content -LiteralPath $urlPath -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:9988/`r`nIconFile=$env:SystemRoot\System32\shell32.dll`r`nIconIndex=21" -Encoding ASCII
+        Write-Output "Verknuepfung: $urlPath"
+    }
 }
 Write-Output "Installiert: $InstallDirectory (Router-Konfiguration: $RouterConfig)"

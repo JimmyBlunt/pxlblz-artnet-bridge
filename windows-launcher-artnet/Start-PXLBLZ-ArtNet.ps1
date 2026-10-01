@@ -1,5 +1,14 @@
-param([switch]$CheckOnly, [switch]$NoOpen)
+param([switch]$CheckOnly, [switch]$NoOpen, [switch]$Interactive)
 $ErrorActionPreference = 'Stop'
+# Every run is logged first, so a click that never reached the script is visible.
+try { Add-Content -LiteralPath (Join-Path $PSScriptRoot 'launch-history.log') -Value ("{0}  Start ({1})" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $(if ($Interactive) {'Desktop/Startmenue'} elseif ($CheckOnly) {'CheckOnly'} elseif ($NoOpen) {'NoOpen'} else {'unsichtbar'})) -Encoding UTF8 } catch {}
+if ($Interactive) {
+    try { $Host.UI.RawUI.WindowTitle = 'PXLBLZ-IDE~ArtNet wird gestartet ...' } catch {}
+    Write-Host ''
+    Write-Host '  PXLBLZ-IDE~ArtNet wird gestartet ...' -ForegroundColor Cyan
+    Write-Host '  (IDE, lokaler Login, Art-Net-Router - das dauert 10 bis 30 Sekunden)' -ForegroundColor DarkGray
+    Write-Host ''
+}
 # Art-Net counterpart of windows-launcher/Start-PXLBLZ-Fadecandy.ps1 (tag fadecandy-v0.1.1):
 # same two-IDE layout, same local login, the v0.3 Art-Net router instead of fcserver + bridge.
 # Machine-specific paths come from launcher-config.json; browser state stays local.
@@ -68,7 +77,13 @@ function Ensure-IDE([int]$port, [string]$folder, [string]$logName, [string]$prox
 }
 try {
     $locked = $mutex.WaitOne(0)
-    if (-not $locked) { exit 0 }
+    if (-not $locked) {
+        if ($Interactive) {
+            Write-Host '  Der Starter laeuft bereits - bitte das andere Fenster abwarten.' -ForegroundColor Yellow
+            Start-Sleep -Seconds 5
+        }
+        exit 0
+    }
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     $version = & $node --version
     if ([int]($version.TrimStart('v').Split('.')[0]) -lt 24) { throw 'Dieser lokale Starter braucht Node.js 24 oder neuer.' }
@@ -129,10 +144,21 @@ try {
     }
     if ($LASTEXITCODE -ne 0) { throw 'Die lokale Anmeldepruefung ist fehlgeschlagen.' }
     Note 'Art-Net-Startpruefung erfolgreich.'
+    if ($Interactive) {
+        Write-Host ''
+        Write-Host '  Fertig: das Chrome-Fenster "PXLBLZ-IDE~ArtNet" ist offen.' -ForegroundColor Green
+        Write-Host '  Einstellungen: http://127.0.0.1:9988/   - dieses Fenster schliesst sich gleich.' -ForegroundColor DarkGray
+        Start-Sleep -Seconds 5
+    }
 } catch {
     $report.Add('FEHLER: ' + $_.Exception.Message)
     $report | Set-Content -LiteralPath $statusFile -Encoding UTF8
-    if (-not $CheckOnly) {
+    if ($Interactive) {
+        Write-Host ''
+        Write-Host ('  FEHLER: ' + $_.Exception.Message) -ForegroundColor Red
+        Write-Host "  Details: $logDir" -ForegroundColor DarkGray
+        Read-Host '  Enter zum Schliessen' | Out-Null
+    } elseif (-not $CheckOnly) {
         $notice = New-Object -ComObject WScript.Shell
         [void]$notice.Popup($_.Exception.Message, 15, 'PXLBLZ-IDE - ArtNet', 16)
     }

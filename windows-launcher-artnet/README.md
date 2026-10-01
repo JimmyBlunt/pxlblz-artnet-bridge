@@ -46,8 +46,13 @@ exactly as in the Fadecandy setup. Nothing is synchronised with GitHub or the on
     -RouterBinDirectory '<folder with pxlblz-router.exe>' -RouterConfig 'config\routes.esp-test-172.json'
 ```
 
-Double-click **PXLBLZ-IDE - ArtNet** on the desktop. The installer also creates
-**PXLBLZ-ArtNet Einstellungen** (opens `http://127.0.0.1:9988/`).
+Double-click **PXLBLZ-IDE - ArtNet** on the desktop (also in the Start menu folder
+**PXLBLZ-IDE ArtNet**). A small window "PXLBLZ-IDE~ArtNet wird gestartet ..." shows the
+checks; it closes by itself after success (10-30 s) and stays open with the error message
+otherwise. Every run is logged first in `launch-history.log` - if a click shows no window
+and no new line there, Windows never started the script. The installer also creates
+**PXLBLZ-ArtNet Einstellungen** (opens `http://127.0.0.1:9988/`) on the desktop and in the
+Start menu.
 
 Re-running the installer is safe: it replaces the router exe (stopping this workspace's
 running router first), **adds** new repository configs but **keeps** existing workspace
