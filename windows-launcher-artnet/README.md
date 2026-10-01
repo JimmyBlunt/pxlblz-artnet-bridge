@@ -6,6 +6,10 @@ dedicated browser profile — the Art-Net router v0.3 replaces fcserver + Fadeca
 Installed separately (`%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet`, own mutex and browser
 profile), so it does not interfere with an existing Fadecandy installation.
 
+**Configuration help (German, step by step: controller IPs, routing targets, universes,
+LED counts, changing the active config, troubleshooting):
+[`docs/KONFIGURATION_HILFE.md`](../docs/KONFIGURATION_HILFE.md).**
+
 ## Workspace layout
 
 ```text
