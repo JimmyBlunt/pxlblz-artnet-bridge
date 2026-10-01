@@ -365,3 +365,22 @@ launcher installer, temp workspace:
 launcher start check                                     all OK incl. "Einstellungsseite"
 PXLBLZ output tab                                        title "PXLBLZ-IDE~ArtNet", badge shows router state
 ```
+
+## H-INST1 — installation controllers at 30 / 60 FPS, 2026-10-01
+
+Through the running router (config API + test pattern, no second sender),
+`perf-test/installation-fps-test.mjs`, rainbow, 20-30 s per step. Details and options:
+`docs/FPS60_AUSWERTUNG.md`.
+
+```text
+controller                         30 fps      60 fps: complete rx      LEDs at 60      LED output/frame
+ESP rig 10.0.0.248 (Wi-Fi)          100 %      60.0 fps (0-0.1 % loss)   59.3 fps        2.2 ms
+Teensy 10.0.0.253 (wired, 32 U)     100 %      60.0 fps (0 % loss)       29.9 fps        29.3 ms (880-LED lane)
+APA102 10.0.0.251 (Wi-Fi, 6 U)      100 %      57.5-58.1 fps (3-4 %)     29.5 (target 30) / 56.1-56.8 (target 60, not saved)  12.4 ms
+router: exact 30.0 / 60.0 fps per controller, 0 send errors
+```
+
+.251 packet analysis at 60 fps: 7482 sent / 7186 received (96 %), firmware dropped 0,
+sequence errors 0 -> loss is the Wi-Fi link. Router-side mitigations tried and removed:
+send twice (5.1 % loss), packet gap 0.5 ms (4.0 %), 1.5 ms (6.0 %).
+Controller settings were restored after every run (.251 targetFps 30, saved=matches).
