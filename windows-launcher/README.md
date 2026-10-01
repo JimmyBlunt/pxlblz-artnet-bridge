@@ -1,4 +1,4 @@
-﻿# Windows desktop starter: Fadecandy v0.1.1
+# Windows desktop starter: Fadecandy v0.1.1
 
 This versions the working Windows L3D setup, including the desktop shortcut,
 a separate Chrome/Edge profile, the local authenticated Studio and startup checks.

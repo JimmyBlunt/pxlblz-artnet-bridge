@@ -525,3 +525,26 @@ Router and wired network: loss-free at 60 fps. .251: remaining ~0.9 % lost below
 queue (`rxQueueDrops` 0) - Wi-Fi / lwIP. .253: 34 fps at the LEDs, limited by the 880-LED lane.
 Diagnostics differ between firmwares (Teensy ~90 status fields, ESP32 21) - alignment task:
 `docs/FIRMWARE_DIAGNOSE_ANGLEICH_PROMPT.md`.
+
+---
+
+## I1 - integration merge `integration/2026-10` (main + v0.3 + fadecandy), 2026-10-02
+
+Software only, Windows 11, Go 1.27.0, Node 24, TypeScript 5.8.3. No hardware connected.
+
+```text
+router/     go build ./... + go vet ./... OK; go test ./...    69 tests PASS, 0 FAIL
+fadecandy/  go build ./... + go vet ./... OK; go test ./...    15 tests PASS, 0 FAIL
+pxlblz-integration/virtual-test/run-virtual-e2e.mjs            ALL_VIRTUAL_TESTS_PASS
+  ADAPTER_SELFTEST, E2E_A (48 universes), E2E_B (8186 px, 870 pkt/s),
+  E2E_C (3 known controllers, 44 universes, 1320 pkt/s), E2E_D (virtual Teensy), 6 fault scenarios
+perf-test/run-performance.mjs --profile smoke --seconds 20     PASS  tx 29.4 fps, 854 pkt/s, send p95 0.81 ms
+perf-test/run-performance.mjs --profile installation --seconds 20  PASS  tx 58.9 fps, 1562 pkt/s, send p95 0.60 ms
+GOOS=windows build of all router + fadecandy commands (scratch dir, not bin/)  OK
+pxlblz-router --list-routes: routes.installation-live.json (3 controllers, 5534 px) and
+  routes.installation-known.json (brightness "level 0.70" on .244 routes) load
+install-pxlblz-output.ps1 (Windows PowerShell 5.1) on a throwaway clone of PXLBLZ-IDE 21b764ab:
+  install + re-run byte-identical, no BOM, no mojibake, tsc --noEmit clean
+```
+
+Hardware still open: V2 panel-walk on the merged state, .244 not connected.

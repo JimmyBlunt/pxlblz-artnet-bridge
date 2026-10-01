@@ -1,4 +1,4 @@
-﻿# Fadecandy v0.1.1 — Windows desktop snapshot
+# Fadecandy v0.1.1 — Windows desktop snapshot
 
 Saved on 2026-09-21, before any Pattern preset work.
 

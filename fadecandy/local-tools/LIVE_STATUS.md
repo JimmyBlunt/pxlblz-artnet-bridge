@@ -1,4 +1,4 @@
-﻿# Fadecandy live connection — 2026-09-20
+# Fadecandy live connection — 2026-09-20
 
 ## Local authenticated workspace (current entry point)
 
