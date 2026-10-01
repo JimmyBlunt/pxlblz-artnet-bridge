@@ -384,3 +384,10 @@ router: exact 30.0 / 60.0 fps per controller, 0 send errors
 sequence errors 0 -> loss is the Wi-Fi link. Router-side mitigations tried and removed:
 send twice (5.1 % loss), packet gap 0.5 ms (4.0 %), 1.5 ms (6.0 %).
 Controller settings were restored after every run (.251 targetFps 30, saved=matches).
+
+### H-INST2 — port-id on the installation, 2026-10-02
+
+Router test pattern `port-id` (page /api/test) on .253 (8 outputs), .251 (2 outputs) and .248:
+user confirmation "colors are good" - every output shows its port color (1 red, 2 green,
+3 blue, 4 cyan, 5 magenta, 6 yellow, 7 white, 8 red). Universes and color order confirmed;
+router sends RGB to all three (both firmwares reorder themselves).
