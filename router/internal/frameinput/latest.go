@@ -10,6 +10,7 @@ import (
 type LatestFrame struct {
 	mu       sync.Mutex
 	buf      []byte
+	variable atomic.Bool
 	have     bool
 	gen      uint64
 	consumed uint64
@@ -18,6 +19,7 @@ type LatestFrame struct {
 	replaced  atomic.Uint64
 	invalid   atomic.Uint64
 	lastUnix  atomic.Int64
+	badLen    atomic.Int64 // byte length of the last rejected frame
 }
 
 type Stats struct {
@@ -25,6 +27,9 @@ type Stats struct {
 	Replaced  uint64
 	Invalid   uint64
 	LastAt    time.Time
+	// LastInvalidLen is the byte length of the most recently rejected frame
+	// (0 = none or rejected without a length).
+	LastInvalidLen int
 }
 
 func NewLatestFrame(size int) (*LatestFrame, error) {
@@ -36,18 +41,35 @@ func NewLatestFrame(size int) (*LatestFrame, error) {
 
 func (l *LatestFrame) Size() int { return len(l.buf) }
 
+// AcceptVariableSize makes Submit take any whole-pixel frame length: the first
+// Size() bytes are used and a shorter frame clears the rest, so unused LEDs do
+// not keep colors from a previous, longer frame. Call before input starts.
+func (l *LatestFrame) AcceptVariableSize() { l.variable.Store(true) }
+
+// SetVariableSize switches between variable-size and exact-size input; safe
+// while input is running (used when a new config is applied live).
+func (l *LatestFrame) SetVariableSize(on bool) { l.variable.Store(on) }
+
 func (l *LatestFrame) Reject() { l.invalid.Add(1) }
 
 func (l *LatestFrame) Submit(frame []byte) error {
-	if len(frame) != len(l.buf) {
+	if l.variable.Load() {
+		if len(frame) == 0 || len(frame)%3 != 0 {
+			l.invalid.Add(1)
+			l.badLen.Store(int64(len(frame)))
+			return fmt.Errorf("frame length %d must contain complete RGB pixels", len(frame))
+		}
+	} else if len(frame) != len(l.buf) {
 		l.invalid.Add(1)
+		l.badLen.Store(int64(len(frame)))
 		return fmt.Errorf("frame length %d, expected %d", len(frame), len(l.buf))
 	}
 	l.mu.Lock()
 	if l.have && l.gen != l.consumed {
 		l.replaced.Add(1)
 	}
-	copy(l.buf, frame)
+	n := copy(l.buf, frame)
+	clear(l.buf[n:])
 	l.gen++
 	l.have = true
 	l.mu.Unlock()
@@ -80,9 +102,37 @@ func (l *LatestFrame) Stats() Stats {
 		t = time.Unix(0, n)
 	}
 	return Stats{
-		Submitted: l.submitted.Load(),
-		Replaced:  l.replaced.Load(),
-		Invalid:   l.invalid.Load(),
-		LastAt:    t,
+		Submitted:      l.submitted.Load(),
+		Replaced:       l.replaced.Load(),
+		Invalid:        l.invalid.Load(),
+		LastAt:         t,
+		LastInvalidLen: int(l.badLen.Load()),
 	}
+}
+
+// Snapshot copies the newest frame into dst for one of several independent
+// consumers (one per controller). It does not block the producer beyond a
+// memcpy. lastGen is the generation this consumer saw previously; fresh is
+// true when a newer frame is available. Frames that were replaced before ANY
+// consumer observed them are counted in Stats().Replaced.
+func (l *LatestFrame) Snapshot(dst []byte, lastGen uint64) (have bool, fresh bool, generation uint64, at time.Time, err error) {
+	if len(dst) != len(l.buf) {
+		return false, false, 0, time.Time{}, fmt.Errorf("destination length %d, expected %d", len(dst), len(l.buf))
+	}
+	l.mu.Lock()
+	if !l.have {
+		l.mu.Unlock()
+		return false, false, 0, time.Time{}, nil
+	}
+	generation = l.gen
+	fresh = generation != lastGen
+	if fresh {
+		copy(dst, l.buf)
+	}
+	l.consumed = l.gen
+	l.mu.Unlock()
+	if n := l.lastUnix.Load(); n != 0 {
+		at = time.Unix(0, n)
+	}
+	return true, fresh, generation, at, nil
 }

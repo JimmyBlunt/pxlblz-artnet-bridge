@@ -1,0 +1,146 @@
+{
+  "version": 2,
+  "_comment": "Installation, verified 2026-10-02 (port-id colors OK on every output): ESP32 test rig 10.0.0.248 (APA102 chain 8x8+FeatherWing 12x6, 136 px, U149), Teensy41 Octo WS2812B back panels 10.0.0.253 (8 outputs, 4593 px, U120-U152 without U138), ESP32 flex8 APA102 back panels 10.0.0.251 (256+549 px, U156-U161). Routes imported from the controllers (/api/config). Pixel layout is SEQUENTIAL (ESP 0-135, Teensy 136-4728, APA 4729-5533) - not the historical 8186-px logical frame of routes.installation-full.json. All controllers 60 fps; both firmwares reorder colors themselves, router sends RGB.",
+  "input": {
+    "pixel_count": 5534,
+    "fps_target": 60,
+    "stale_timeout_ms": 1000,
+    "on_stale": "stop",
+    "variable_size": true
+  },
+  "artnet": {
+    "udp_port": 6454,
+    "unicast": true
+  },
+  "controllers": [
+    {
+      "name": "ESP_TEST",
+      "target_ip": "10.0.0.248",
+      "fps_target": 60
+    },
+    {
+      "name": "BackPannels WS2812",
+      "target_ip": "10.0.0.253",
+      "enabled": true,
+      "fps_target": 60
+    },
+    {
+      "name": "BackPannels APA102",
+      "target_ip": "10.0.0.251",
+      "enabled": true,
+      "fps_target": 60
+    }
+  ],
+  "routes": [
+    {
+      "name": "ESP_OUT6_APA102_CHAIN",
+      "enabled": true,
+      "target_ip": "10.0.0.248",
+      "physical_port": 7,
+      "pixel_start": 0,
+      "pixel_count": 136,
+      "universe_start": 149,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT0_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 1,
+      "pixel_start": 136,
+      "pixel_count": 203,
+      "universe_start": 120,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT1_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 2,
+      "pixel_start": 339,
+      "pixel_count": 738,
+      "universe_start": 122,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT2_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 3,
+      "pixel_start": 1077,
+      "pixel_count": 880,
+      "universe_start": 127,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT3_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 4,
+      "pixel_start": 1957,
+      "pixel_count": 810,
+      "universe_start": 133,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT4_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 5,
+      "pixel_start": 2767,
+      "pixel_count": 352,
+      "universe_start": 139,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT5_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 6,
+      "pixel_start": 3119,
+      "pixel_count": 610,
+      "universe_start": 142,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT6_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 7,
+      "pixel_start": 3729,
+      "pixel_count": 512,
+      "universe_start": 146,
+      "color_order": "RGB"
+    },
+    {
+      "name": "Teensy41-Octo-Fastled_OUT7_WS2812B",
+      "enabled": true,
+      "target_ip": "10.0.0.253",
+      "physical_port": 8,
+      "pixel_start": 4241,
+      "pixel_count": 488,
+      "universe_start": 150,
+      "color_order": "RGB"
+    },
+    {
+      "name": "BackPannels APA102_OUT0_APA102",
+      "enabled": true,
+      "target_ip": "10.0.0.251",
+      "physical_port": 1,
+      "pixel_start": 4729,
+      "pixel_count": 256,
+      "universe_start": 156,
+      "color_order": "RGB"
+    },
+    {
+      "name": "BackPannels APA102_OUT1_APA102",
+      "enabled": true,
+      "target_ip": "10.0.0.251",
+      "physical_port": 2,
+      "pixel_start": 4985,
+      "pixel_count": 549,
+      "universe_start": 158,
+      "color_order": "RGB"
+    }
+  ]
+}

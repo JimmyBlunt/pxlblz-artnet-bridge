@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "_comment": "ESP32 test rig alone (10.0.0.248 on the installation network; was 172.20.10.2 on the phone hotspot): ONE APA102 chain on ESP out6 = 8x8 matrix (px 0..63) then DotStar FeatherWing 12x6 (px 64..135), 136 px = 408 bytes in U149. PXLBLZ/Pixelblaze map: pxlblz-integration/maps/esp-test-8x8-12x6.js. Needs ESP out6 = 136 LEDs and out0 disabled. Firmware reorders colors itself, so the router sends RGB. The whole installation: routes.installation-live.json.",
+  "input": {
+    "pixel_count": 136,
+    "fps_target": 60,
+    "stale_timeout_ms": 1000,
+    "on_stale": "blackout",
+    "variable_size": true
+  },
+  "artnet": {
+    "udp_port": 6454,
+    "unicast": true
+  },
+  "controllers": [
+    {
+      "name": "ESP_TEST",
+      "target_ip": "10.0.0.248",
+      "fps_target": 60
+    }
+  ],
+  "routes": [
+    {
+      "name": "ESP_OUT6_APA102_CHAIN",
+      "enabled": true,
+      "target_ip": "10.0.0.248",
+      "physical_port": 7,
+      "pixel_start": 0,
+      "pixel_count": 136,
+      "universe_start": 149,
+      "color_order": "RGB"
+    }
+  ]
+}

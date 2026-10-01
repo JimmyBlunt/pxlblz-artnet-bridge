@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "_comment": "ESP32 test controller (esp32-wroom-flex-8ws-2apa) on the phone hotspot. Firmware reorders colors itself (out0 GRB, out6 BGR), so the router sends RGB.",
+  "input": {"pixel_count": 330, "fps_target": 60, "stale_timeout_ms": 1000, "on_stale": "blackout", "variable_size": true},
+  "artnet": {"udp_port": 6454, "unicast": true},
+  "controllers": [
+    {"name": "ESP_TEST", "target_ip": "172.20.10.2", "fps_target": 60}
+  ],
+  "routes": [
+    {"name": "ESP_OUT0_WS2812", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 1, "pixel_start": 0, "pixel_count": 203, "universe_start": 120, "color_order": "RGB"},
+    {"name": "ESP_OUT6_APA102", "enabled": true, "target_ip": "172.20.10.2", "physical_port": 7, "pixel_start": 203, "pixel_count": 127, "universe_start": 149, "color_order": "RGB"}
+  ]
+}

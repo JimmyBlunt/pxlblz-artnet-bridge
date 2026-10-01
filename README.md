@@ -16,60 +16,80 @@ LED controllers
 physical LEDs
 ```
 
-## Current status
+## Current status (integration branch `integration/2026-10`, 2026-10-02)
 
-- Router v0.2.1 live-input path verified on Windows
-- Binary WebSocket input on `ws://127.0.0.1:9980/pixels`
-- Latest-frame semantics: old video frames are replaced, never queued
-- Art-Net universe routing with receiver-compatible even-length final payloads
-- BACK_PANEL_249 hardware test passed across all **7 electrical outputs / 6 physical panels**
-- External sender 60 FPS → router 30 FPS → 29 Art-Net universes → real LEDs: PASS
-- Experimental direct PXLBLZ IDE render-frame adapter is included under `pxlblz-integration/`
+- **Router v0.3**: several controllers in one config (`controllers[]`), own scheduler, FPS
+  target and Art-Net sequence per controller, `on_stale` blackout, `input.variable_size`
+  - see [docs/V0.3_MULTI_CONTROLLER.md](docs/V0.3_MULTI_CONTROLLER.md)
+- **Settings page** at `http://127.0.0.1:9988/`: edit, check and apply the config live (with
+  backups), discover controllers and import their outputs, test patterns - see
+  [docs/KONFIGURATION_HILFE.md](docs/KONFIGURATION_HILFE.md)
+- **PXLBLZ IDE runs locally** with the Art-Net output adapter (tab "PXLBLZ-IDE~ArtNet", status
+  badge) and a desktop starter: [`windows-launcher-artnet/`](windows-launcher-artnet/README.md)
+- **Whole installation verified on hardware** at 60 fps router target (port-id colors OK):
+  Teensy .253 (4593 px, 32 universes), APA102 .251 (805 px), ESP test rig .248 (136 px).
+  Running config: `router/config/routes.installation-live.json`; controllers:
+  [controller-reference/INSTALLATION_CONTROLLERS.md](controller-reference/INSTALLATION_CONTROLLERS.md)
+- Router and wired network deliver 60 fps loss-free. At the LEDs: .248 ~59 fps, .253 ~34 fps
+  (WS2812 lane length), .251 ~57 fps (firmware receive loop; fix prepared in
+  [docs/ESP_FIRMWARE_RX_FIX_PROMPT.md](docs/ESP_FIRMWARE_RX_FIX_PROMPT.md)) - details and
+  options in [docs/FPS60_AUSWERTUNG.md](docs/FPS60_AUSWERTUNG.md)
+- Unchanged from v0.2: binary WebSocket input `ws://127.0.0.1:9980/pixels`, latest-frame
+  semantics (old frames are replaced, never queued), even-length final ArtDmx payloads
+- **Per-route `brightness`** (0..1, optional) from the main line, applied via a lookup table
+  in the router
+- **Virtual Teensy controller / receiver / visualizer** (hardware-free Art-Net receiver with
+  browser view and benchmarks) - see [router/VIRTUAL_CONTROLLER.md](router/VIRTUAL_CONTROLLER.md)
 - Native-Windows local Studio synthetic authentication is automated and CI verified
-- Known 3-controller installation route is virtually verified at 44 universes/frame
+  ([docs/WINDOWS_PXLBLZ_LOCAL_STUDIO.md](docs/WINDOWS_PXLBLZ_LOCAL_STUDIO.md))
 - Virtual exact-adapter and performance gates pass on Windows and Linux
+- BACK_PANEL_249 hardware test passed across all 7 electrical outputs / 6 physical panels
 
 ## Repository layout
 
 ```text
 router/
-  cmd/                       Go entry points
-  internal/                  Art-Net, routing, WebSocket, LatestFrame
-  config/                    verified/test routing configurations
+  cmd/pxlblz-router/         router + settings page (web.go, ui/index.html)
+  cmd/                       frame sender, Art-Net listener, perf tools
+  internal/                  Art-Net, routing, scheduler, engine (live config swap),
+                             controllerapi (firmware API discovery), WebSocket, LatestFrame,
+                             virtualcontroller (virtual Teensy receiver + visualizer)
+  config/                    routing configs (routes.installation-live.json = running installation)
   third_party/projectMM/     provenance + GPLv3 license
   *.bat                      Windows build/test helpers
+  TEST_RESULTS.md            software, perf and hardware test log
 
-bin/windows-x64/
-  pxlblz-router.exe
-  pxlblz-frame-sender.exe
-  artnet-listener.exe
-  SHA256SUMS.txt
+bin/windows-x64/             CI-built executables (see "Windows binaries")
 
 docs/
-  PROJECT_PLAN.md
+  KONFIGURATION_HILFE.md     settings page, IPs, routing, troubleshooting (German)
+  FPS60_AUSWERTUNG.md        60 fps measurements and optimization options
+  KNOWN_INSTALLATION_TOPOLOGY.md, V0.3_MULTI_CONTROLLER.md, CURRENT_STATUS_HANDOFF.md,
+  ESP_FIRMWARE_RX_FIX_PROMPT.md, PROJECT_PLAN.md, ...
 
 controller-reference/
+  INSTALLATION_CONTROLLERS.md  verified controllers, outputs, APIs
+  snapshots-2026-10-02/        controller /api/config snapshots
   BACK_PANEL_249_RECEIVER.md
 
 pxlblz-integration/
-  src/externalPixelOutput.ts
-  install-pxlblz-output.ps1
-  Preview.integration.md
-  README.md
+  src/externalPixelOutput.ts   PXLBLZ IDE output adapter
+  maps/, patterns/             PXLBLZ map + pattern for the ESP test rig
+  tools/                       local D1 import / identity seed for the local IDE
+  install-pxlblz-output.ps1, virtual-test/
 
-.github/workflows/
-  build-windows.yml
+windows-launcher-artnet/     desktop starter (router + local PXLBLZ IDE)
+perf-test/                   hardware ramp + installation FPS test through the router API
 ```
 
 ## Windows binaries
 
-The current Windows x64 executables are committed under:
-
-```text
-bin/windows-x64/
-```
-
-They are generated from the committed Go source by GitHub Actions after the test suite passes. Checksums are in `bin/windows-x64/SHA256SUMS.txt`.
+Windows x64 executables are committed under `bin/windows-x64/`, generated by GitHub Actions
+after the test suite passes (checksums in `SHA256SUMS.txt`). After the 2026-10 integration
+merge the committed binaries are the last CI builds of each line (router/probe/sender/listener
+from v0.3, receiver-probe/virtual-controller from main), not a build of the merged source;
+the next CI build on the merged branch replaces them. Until then build the router from
+source (below) - the desktop starter installs the router it is given.
 
 ## Build from source
 
@@ -81,19 +101,17 @@ build-windows.bat
 
 ## Hardware routing currently verified
 
-`BACK_PANEL_249` at `10.0.0.253:6454`:
+`routes.installation-live.json` (2026-10-02), all RGB, 60 fps router target:
 
 ```text
-P1  pixels 1440..1642  U120..U121  203 LEDs
-P2  pixels 3744..4481  U122..U126  738 LEDs
-P3  pixels 4482..5361  U127..U132  880 LEDs
-P4  pixels 5362..6171  U133..U137  810 LEDs
-P5  pixels 6172..6523  U139..U141  352 LEDs
-P6  pixels 6524..7133  U142..U145  610 LEDs
-P7  pixels 7134..7645  U146..U149  512 LEDs
+ESP test rig 10.0.0.248   pixels    0..135   U149            136 LEDs (APA102)
+Teensy       10.0.0.253   pixels  136..4728  U120..U152*    4593 LEDs (WS2812B, 8 outputs)
+APA102       10.0.0.251   pixels 4729..5533  U156..U161      805 LEDs (2 outputs)
+* without U138
 ```
 
-P6 + P7 are two electrical lanes belonging to the same sixth physical panel.
+Per-output tables and the earlier 8186-pixel BACK_PANEL_249 frame:
+[docs/KNOWN_INSTALLATION_TOPOLOGY.md](docs/KNOWN_INSTALLATION_TOPOLOGY.md).
 
 See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for architecture, test history, receiver requirements, and the deferred fine-tuning backlog.
 
@@ -130,3 +148,7 @@ the virtual integration gate.
 
 APA102 is intentionally excluded until its exact physical routing data is
 confirmed.
+
+Note: this "known" config predates the 2026-10-02 hardware verification and is
+kept for the virtual gates. The running installation is described by
+`routes.installation-live.json` (see above), where .251 is the APA102 controller (RGB).

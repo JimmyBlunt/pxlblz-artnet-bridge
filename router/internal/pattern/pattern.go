@@ -158,3 +158,90 @@ func hsv(h, s, v float64) (byte, byte, byte) {
 	}
 	return byte(r*255 + 0.5), byte(g*255 + 0.5), byte(b*255 + 0.5)
 }
+
+// FillPanelWalk is the G9 visual-verification pattern. It needs no PXLBLZ.
+//
+//   - Every enabled route is dimly lit in its port colour (P1 red, P2 green,
+//     P3 blue, P4 cyan, P5 magenta, P6 yellow, P7 white) so all panels are
+//     visibly alive and identifiable.
+//   - The first 3 pixels of every route are brighter in the port colour:
+//     this marks the electrical START of the lane, i.e. its direction.
+//   - One white "head" with a fading port-coloured tail walks through all
+//     enabled routes in config order (P1 → P2 → … → P7), advancing
+//     `speed` logical pixels per output frame. Watching the head reveals
+//     panel order, lane direction and the P6 → P7 hand-over on Panel 6.
+//
+// Brightness is kept low on purpose (background 6/255, head 160/255) so the
+// pattern is safe to run on the full installation power budget.
+func FillPanelWalk(frame []byte, pixelCount int, routes []cfgpkg.Route, frameNo uint64, speed int) error {
+	if len(frame) != pixelCount*3 {
+		return fmt.Errorf("frame has %d bytes, expected %d", len(frame), pixelCount*3)
+	}
+	if speed < 1 {
+		speed = 1
+	}
+	solid(frame, 0, 0, 0)
+
+	const bgLevel byte = 6
+	const startLevel byte = 56
+	const startPixels = 3
+	const headLevel byte = 160
+	const tail = 24
+
+	palette := portPalette()
+	total := 0
+	for _, r := range routes {
+		if !r.Enabled || r.PixelCount <= 0 {
+			continue
+		}
+		if r.PixelStart < 0 || r.PixelStart+r.PixelCount > pixelCount {
+			return fmt.Errorf("route %q pixel range outside frame", r.Name)
+		}
+		total += r.PixelCount
+	}
+	if total == 0 {
+		return nil
+	}
+	head := int((frameNo * uint64(speed)) % uint64(total))
+
+	offset := 0
+	for idx, r := range routes {
+		if !r.Enabled || r.PixelCount <= 0 {
+			continue
+		}
+		pi := r.PhysicalPort - 1
+		if pi < 0 {
+			pi = idx
+		}
+		base := palette[pi%len(palette)]
+		for i := 0; i < r.PixelCount; i++ {
+			lvl := bgLevel
+			if i < startPixels {
+				lvl = startLevel
+			}
+			setScaledPixel(frame, r.PixelStart+i, base, lvl)
+
+			// distance behind the head along the concatenated walk
+			d := head - (offset + i)
+			if d < 0 {
+				d += total
+			}
+			switch {
+			case d == 0:
+				p := (r.PixelStart + i) * 3
+				frame[p], frame[p+1], frame[p+2] = headLevel, headLevel, headLevel
+			case d < tail:
+				l := byte(int(headLevel) * (tail - d) / tail)
+				if l > lvl {
+					setScaledPixel(frame, r.PixelStart+i, base, l)
+				}
+			}
+		}
+		offset += r.PixelCount
+	}
+	return nil
+}
+
+func portPalette() [][3]byte {
+	return [][3]byte{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {0, 1, 1}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}}
+}

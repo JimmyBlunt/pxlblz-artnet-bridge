@@ -3,6 +3,8 @@ setlocal
 if not exist dist\windows mkdir dist\windows
 set GOOS=windows
 set GOARCH=amd64
+go test ./...
+if errorlevel 1 exit /b 1
 go build -trimpath -ldflags "-s -w" -o dist\windows\pxlblz-router.exe .\cmd\pxlblz-router
 if errorlevel 1 exit /b 1
 go build -trimpath -ldflags "-s -w" -o dist\windows\artnet-listener.exe .\cmd\artnet-listener

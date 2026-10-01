@@ -1,0 +1,47 @@
+diff --git a/src/engine/maps/custom.ts b/src/engine/maps/custom.ts
+index cef43a39..dc7fda4d 100644
+--- a/src/engine/maps/custom.ts
++++ b/src/engine/maps/custom.ts
+@@ -32,9 +32,12 @@ export function inferDim(points: number[][]): 1 | 2 | 3 {
+ // Build a runtime PixelMap from a baked coordinate array. `sample` (fed to the
+ // render fn) and the drawn `pos` coincide, both as authored. Coordinates are
+ // expected normalized to [0,1] per axis (firmware-normalized map space).
++// `fixedPixelCount`: set for a map authored as a literal coordinate array (e.g.
++// an imported installation map) - like a stock literal map it then has exactly
++// that many pixels, whatever count a pattern persisted earlier.
+ export function createCustomMap(
+   points: number[][],
+-  opts: { id: string; name: string; gridDims?: GridDims },
++  opts: { id: string; name: string; gridDims?: GridDims; fixedPixelCount?: number },
+ ): PixelMap {
+   const dim = inferDim(points)
+   // Freeze the baked array so resolve replays (never regenerates) from it.
+@@ -50,6 +53,7 @@ export function createCustomMap(
+     // count-independent; null when the baked points are an irregular cloud.
+     gridDims: () => opts.gridDims ?? null,
+     bakedCount: baked.length,
++    ...(opts.fixedPixelCount !== undefined ? { fixedPixelCount: opts.fixedPixelCount } : {}),
+     resolve(pixelCount: number): MapPoint[] {
+       const out: MapPoint[] = []
+       for (let i = 0; i < pixelCount; i++) {
+diff --git a/src/store/mapStore.ts b/src/store/mapStore.ts
+index 60185ae8..45d897ef 100644
+--- a/src/store/mapStore.ts
++++ b/src/store/mapStore.ts
+@@ -98,7 +98,15 @@ export function mapFromRecord(r: MapRecord): PixelMap {
+   // A custom map replays its baked coordinate array; stock generators
+   // rebuild live from params. The recorded grid dims ride along for the readout.
+   if (r.generator === 'custom') {
+-    return createCustomMap(r.points ?? [], { id: r.id, name: r.name, gridDims: r.gridDims })
++    // A literal coordinate array (`[[x,y,z], ...]`) has a measured point count:
++    // lock the count to it, as stock literal maps and the Show editor already do.
++    const literal = !!r.source && r.source.trimStart().startsWith('[') && (r.points?.length ?? 0) > 0
++    return createCustomMap(r.points ?? [], {
++      id: r.id,
++      name: r.name,
++      gridDims: r.gridDims,
++      ...(literal ? { fixedPixelCount: r.points!.length } : {}),
++    })
+   }
+   return buildMap(r.id, r.name, r.generator)
+ }

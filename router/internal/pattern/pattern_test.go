@@ -61,3 +61,50 @@ func pixel(frame []byte, p int) (byte, byte, byte) {
 	i := p * 3
 	return frame[i], frame[i+1], frame[i+2]
 }
+
+func TestPanelWalkCrossesRouteBoundaryInConfigOrder(t *testing.T) {
+	const pixels = 400
+	frame := make([]byte, pixels*3)
+	routes := []cfgpkg.Route{
+		// deliberately out of logical order: walk must follow config order
+		{Name: "P6", Enabled: true, PhysicalPort: 6, PixelStart: 200, PixelCount: 50},
+		{Name: "P7", Enabled: true, PhysicalPort: 7, PixelStart: 10, PixelCount: 40},
+		{Name: "off", Enabled: false, PhysicalPort: 1, PixelStart: 300, PixelCount: 50},
+	}
+	isHead := func(p int) bool {
+		r, g, b := pixel(frame, p)
+		return r == 160 && g == 160 && b == 160
+	}
+	// frame 49 with speed 1: head on last pixel of P6
+	if err := FillPanelWalk(frame, pixels, routes, 49, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !isHead(249) {
+		t.Fatal("head should be on last pixel of P6")
+	}
+	// frame 50: head hands over to the first pixel of P7
+	if err := FillPanelWalk(frame, pixels, routes, 50, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !isHead(10) {
+		t.Fatal("head should be on first pixel of P7 after P6")
+	}
+	// tail of P6 still visible in yellow behind the head
+	r, g, b := pixel(frame, 249)
+	if r == 0 || g == 0 || b != 0 {
+		t.Fatalf("P6 tail pixel should be yellow, got %d,%d,%d", r, g, b)
+	}
+	// disabled route stays dark
+	for p := 300; p < 350; p++ {
+		if r, g, b := pixel(frame, p); r|g|b != 0 {
+			t.Fatalf("disabled route pixel %d lit", p)
+		}
+	}
+	// wrap-around
+	if err := FillPanelWalk(frame, pixels, routes, 90, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !isHead(200) {
+		t.Fatal("head should wrap to first pixel of first route")
+	}
+}

@@ -6,6 +6,23 @@
 **Pinned PXLBLZ commit used for the integration:** `d685125b34c694f311972e258efb48d12cf05cd8`  
 **Current bridge generation:** Router v0.2.1 + direct PXLBLZ browser output + virtual/performance regression gates
 
+> **Update 2026-10-02 (branch `feature/v0.3-multi-controller`):** this document is the
+> 2026-09-26 handoff and kept as history. Since then:
+>
+> - Router v0.3 (multi-controller, settings page `http://127.0.0.1:9988/`, live config apply)
+>   - `docs/V0.3_MULTI_CONTROLLER.md`, `docs/KONFIGURATION_HILFE.md`.
+> - G8 solved: PXLBLZ IDE runs locally with login and Art-Net output through the desktop
+>   starter `windows-launcher-artnet/`.
+> - G9/G10 largely done: whole installation (.248 test rig, .253 Teensy now with 8 outputs /
+>   32 universes, .251 APA102 549+256 LEDs, all RGB) verified with port-id colors -
+>   `router/config/routes.installation-live.json`,
+>   `controller-reference/INSTALLATION_CONTROLLERS.md`, `docs/KNOWN_INSTALLATION_TOPOLOGY.md`.
+>   .244 is not connected yet.
+> - 60 fps: router and wired network loss-free; LED limits and options in
+>   `docs/FPS60_AUSWERTUNG.md`; ESP32 firmware receive fix in
+>   `docs/ESP_FIRMWARE_RX_FIX_PROMPT.md` (pending on the firmware PC).
+> - Test log: `router/TEST_RESULTS.md` (L1-L2, P1-P2, H-ESP1-4, W1, H-INST1-2).
+
 ---
 
 ## 1. Main mission

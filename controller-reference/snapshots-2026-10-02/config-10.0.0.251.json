@@ -1,0 +1,37 @@
+{
+  "pixelCount": 805,
+  "startUniverse": 0,
+  "universeCount": 6,
+  "targetFps": 60,
+  "hardwareProfile": "flex8-ws2812-apa102",
+  "outputs": [
+    {
+      "id": 0,
+      "type": "APA102",
+      "enabled": true,
+      "startPixel": 0,
+      "pixelCount": 256,
+      "dataPin": 18,
+      "clockPin": 19,
+      "colorOrder": "RGB",
+      "reverse": false,
+      "spiHz": 4000000,
+      "startUniverse": 156,
+      "targetFps": 60
+    },
+    {
+      "id": 1,
+      "type": "APA102",
+      "enabled": true,
+      "startPixel": 256,
+      "pixelCount": 549,
+      "dataPin": 25,
+      "clockPin": 26,
+      "colorOrder": "RGB",
+      "reverse": false,
+      "spiHz": 4000000,
+      "startUniverse": 158,
+      "targetFps": 60
+    }
+  ]
+}

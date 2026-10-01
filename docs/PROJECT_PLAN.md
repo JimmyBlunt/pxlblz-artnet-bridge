@@ -3,6 +3,7 @@
 ## Status
 
 **2026-09-20:** standalone router, binary WebSocket live-input path, and direct PXLBLZ IDE browser output are transport-verified.  
+**2026-09-26:** branch `feature/v0.3-multi-controller` adds per-controller scheduling, stale-input handling, a `panel-walk` visual test pattern, `/status` JSON and the full known installation config (.244/.251/.253). Software-verified only — see `docs/V0.3_MULTI_CONTROLLER.md`.  
 **Active milestone:** visually verify mapped PXLBLZ pattern output on the real installation, then move from experimental `?pxout=1` control toward a proper PXLBLZ output UI.
 
 ## Core architecture
