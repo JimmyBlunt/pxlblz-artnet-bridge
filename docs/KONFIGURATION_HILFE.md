@@ -29,6 +29,13 @@ Dort lässt sich alles aus diesem Dokument ohne Texteditor und **ohne Neustart**
 | Verdrahtung/Ausgabe testen | Abschnitt **Testmuster** (Lauflicht, Port-ID, Regenbogen, Weiß, Schwarz) – PXLBLZ übernimmt danach automatisch wieder |
 | Kontrolle | jede Controller-Karte zeigt live „Router sendet … fps“ und „Controller meldet … vollständig/s · … unvollständig/s“ |
 
+**Öffnen:** Desktop-Verknüpfung **PXLBLZ-ArtNet Einstellungen**, oder im PXLBLZ-Studio
+unten links auf **ArtNet · … · Einstellungen ↗** klicken. Diese kleine Leiste erscheint im
+Studio-Tab mit Art-Net-Ausgabe (Tab-Titel „PXLBLZ-IDE~ArtNet“) und zeigt: grün = Bilder
+kommen beim Router an, gelb = Router läuft, aber PXLBLZ sendet gerade nicht (Tab im
+Hintergrund?) oder ein Testmuster läuft, rot = Router nicht erreichbar. Klick auf „ArtNet“
+klappt sie ein und aus.
+
 Die Seite ist nur vom eigenen PC erreichbar (127.0.0.1). Die gespeicherte Datei ist die,
 mit der der Router gestartet wurde (Pfad unten auf der Seite).
 
@@ -188,6 +195,11 @@ steigen, `framesIncomplete` darf nicht mitsteigen.
 
 ### A) Die IP eines Controllers hat sich geändert
 
+**Mit der Einstellungsseite (empfohlen):** `http://127.0.0.1:9988/` öffnen (Desktop-Verknüpfung
+**PXLBLZ-ArtNet Einstellungen**) → „Controller im Netz suchen“ → beim gefundenen Gerät
+„IP übernehmen für …“ den bisherigen Controller wählen → **Übernehmen & speichern**. Fertig,
+ohne Neustart. Die Schritte unten sind der Weg ohne Seite (Router läuft nicht).
+
 1. Neue IP herausfinden: Geräteliste des WLAN-/LAN-Routers, oder im Browser
    `http://<vermutete-ip>/` öffnen (die Controller-Weboberfläche muss erscheinen).
 2. Die Router-Config des Starters öffnen:
@@ -208,25 +220,26 @@ steigen, `framesIncomplete` darf nicht mitsteigen.
 8. Damit die IP sich nicht mehr ändert: im WLAN-/LAN-Router eine **feste IP
    (DHCP-Reservierung)** für den Controller anlegen.
 
-**Wichtig – Repo-Kopie mitziehen:** Die Configs im Workspace sind Kopien aus dem Repo
-(`router\config\`). `Install-DesktopShortcut.ps1` kopiert beim nächsten Aufruf **alle**
-Repo-Configs erneut in den Workspace und überschreibt dabei Änderungen dort. Deshalb
-die Änderung auch in `pxlblz-artnet-bridge\router\config\<deine-config>.json` machen
-(und committen) – oder nur im Repo ändern und den Installer neu ausführen (siehe B).
+**Welche Datei gilt:** Maßgeblich ist die Config im Workspace
+(`E:\PXLBLZ-ArtNet\artnet\config\`) – die bearbeitet auch die Einstellungsseite.
+`Install-DesktopShortcut.ps1` ergänzt dort nur **neue** Configs aus dem Repo und meldet
+abweichende mit „Config behalten“; überschrieben wird nur mit `-OverwriteConfigs`
+(alte Fassung dann in `config\backups\`). Soll eine Änderung dauerhaft ins Repo, die
+Workspace-Datei nach `pxlblz-artnet-bridge\router\config\` kopieren und committen.
 
 ### B) Eine andere Router-Config verwenden (anderer Aufbau, andere Controller)
 
 1. Config im Repo unter `router\config\` anlegen oder anpassen.
 2. Prüfen: `pxlblz-router.exe --config <datei> --list-routes`.
-3. Installer mit der gewünschten Config ausführen (kopiert Router + alle Configs in den
-   Workspace und trägt die Config im Starter ein, erstellt keine neue Verknüpfung):
+3. Installer mit der gewünschten Config ausführen. Er kopiert den Router, ergänzt neue
+   Configs (bestehende bleiben), trägt die Config im Starter ein und beendet einen laufenden
+   Router dieses Workspaces; ohne `-RouterConfig` bleibt die bisherige Auswahl:
    ```powershell
    .\windows-launcher-artnet\Install-DesktopShortcut.ps1 -WorkspaceRoot 'E:\PXLBLZ-ArtNet' `
        -RouterBinDirectory '<Ordner mit pxlblz-router.exe>' `
        -RouterConfig 'config\<datei>.json' -NoShortcut
    ```
-4. Laufenden Router beenden (Task-Manager → `pxlblz-router.exe`), dann Desktop-Verknüpfung
-   starten.
+4. Desktop-Verknüpfung **PXLBLZ-IDE - ArtNet** starten.
 
 Welche Config gerade aktiv ist: `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\launcher-config.json`
 (Feld `routerConfig`) und `artnet-start-status.txt` im selben Ordner.
@@ -242,7 +255,10 @@ Drei Stellen gehören zusammen:
 3. **PXLBLZ-Map:** gleiche Pixelzahl und Reihenfolge wie die Verkabelung.
    Bei Unsicherheit über die Reihenfolge ein Lauflicht senden (siehe Abschnitt 6).
 
-Danach Router neu starten (Task-Manager → `pxlblz-router.exe`, Desktop-Verknüpfung).
+Mit der Einstellungsseite: Schritt 1 am Controller, dann beim Controller „Ausgänge vom
+Controller übernehmen“ → **Übernehmen & speichern** (ersetzt Schritt 2, ohne Neustart).
+Ohne Seite: Datei ändern, Router beenden (Task-Manager → `pxlblz-router.exe`),
+Desktop-Verknüpfung starten.
 
 ### D) Einen weiteren Controller hinzufügen
 

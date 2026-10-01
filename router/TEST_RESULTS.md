@@ -344,3 +344,24 @@ Update: router chase test (`--pattern chase --fps 4`) on the rig — 8x8 rows ru
 without serpentine (user observation "B"). Map changed to `MATRIX.serpentine: false`; the
 local PXLBLZ map row was re-baked accordingly. Rig wiring is now fully verified.
 User confirmation after reload: the diagonal wave runs cleanly across both boards. Test rig done.
+
+## W1 — router configuration page + launcher step 3, 2026-10-01
+
+Router web page `http://127.0.0.1:9988/` (moved from 9981: TouchDesigner also binds
+0.0.0.0:9981 and Windows then routes requests to either program; startup self-check now warns).
+
+```text
+go vet + all unit tests                                  PASS (engine, controllerapi, web, ...)
+live on ESP rig 10.0.0.248 via the page:
+  discovery 10.0.0.0/24                                  found, recognised as configured
+  FPS 60 -> 50 -> 60 applied live (no restart)           router 50.3 / 60.3 fps, ESP 0 incomplete
+  backup on save                                         config/backups/<name>.<timestamp>.json
+  test pattern "white" 3 s                               PXLBLZ input paused, resumed automatically
+perf lab after the engine refactor: smoke PASS, installation PASS (0 incomplete, 0 gaps)
+launcher installer, temp workspace:
+  first install                                          11 configs added, choice stored
+  re-install, workspace config edited, no -RouterConfig  config kept, choice kept
+  -OverwriteConfigs                                      replaced, old file in config/backups
+launcher start check                                     all OK incl. "Einstellungsseite"
+PXLBLZ output tab                                        title "PXLBLZ-IDE~ArtNet", badge shows router state
+```

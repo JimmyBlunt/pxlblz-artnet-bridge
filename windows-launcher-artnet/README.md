@@ -46,13 +46,26 @@ exactly as in the Fadecandy setup. Nothing is synchronised with GitHub or the on
     -RouterBinDirectory '<folder with pxlblz-router.exe>' -RouterConfig 'config\routes.esp-test-172.json'
 ```
 
-Double-click **PXLBLZ-IDE - ArtNet** on the desktop.
+Double-click **PXLBLZ-IDE - ArtNet** on the desktop. The installer also creates
+**PXLBLZ-ArtNet Einstellungen** (opens `http://127.0.0.1:9988/`).
+
+Re-running the installer is safe: it replaces the router exe (stopping this workspace's
+running router first), **adds** new repository configs but **keeps** existing workspace
+configs (reported as "Config behalten"; replace them only with `-OverwriteConfigs`, which
+backs up the old file to `config\backups`), and keeps the previously chosen router config
+when `-RouterConfig` is omitted. The workspace config is the one the router's web page edits.
+
+In the output-enabled Studio tab (title **PXLBLZ-IDE~ArtNet**) a small badge at the bottom
+left shows router state, frames per second arriving at the router, controllers and running
+test patterns, with a link to the configuration page (green = frames flowing, amber = no
+frames / test pattern, red = router not reachable; click "ArtNet" to collapse).
 
 | Component | Address | Verified |
 | --- | --- | --- |
 | Local API and D1 | localhost:5174 | `__identity` = `PXLBLZ-IDE-main` |
 | IDE with output adapter | localhost:5175 | `__identity` = `PXLBLZ-IDE`; served Preview contains `createExternalPixelOutput` |
 | Art-Net router v0.3 | ws://127.0.0.1:9980/pixels, status http://127.0.0.1:9988/status | executable path, config in live process arguments, `--list-routes` valid |
+| Router configuration page | http://127.0.0.1:9988/ | answered by this router (`X-PXLBLZ-Router` header) - warning only if another program holds the port |
 | Local account | both IDE API routes | signed `github:local-dev` session accepted |
 
 The login helper creates the signed session in the background, verifies it against both

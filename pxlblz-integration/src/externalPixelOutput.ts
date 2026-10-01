@@ -105,6 +105,107 @@ function markArtNetTitle(enabled: boolean): void {
 }
 markArtNetTitle(queryEnabled())
 
+// --- Art-Net status badge ---------------------------------------------------
+// A small collapsible badge (bottom left) in the output-enabled tab: router
+// reachable, frames per second arriving at the router, controllers, running
+// test pattern, and a link to the router's configuration page. It only reads
+// the router's GET /status (CORS-enabled); nothing in PXLBLZ itself changes.
+const ROUTER_PAGE_DEFAULT = 'http://127.0.0.1:9988'
+const BADGE_COLLAPSED_KEY = 'pxlblz:pxout:badgeCollapsed'
+
+function routerPageUrl(): string {
+  if (typeof window === 'undefined') return ROUTER_PAGE_DEFAULT
+  const raw = new URLSearchParams(window.location.search).get('pxoutStatus')
+  return (raw?.trim() || ROUTER_PAGE_DEFAULT).replace(/\/+$/, '')
+}
+
+interface RouterStatusDoc {
+  uptime_s: number
+  rx_frames: number
+  ws_clients: number
+  controllers?: { name: string; target_ip: string; stale: boolean }[]
+  test_pattern?: string
+}
+
+let badgeStarted = false
+function startArtNetBadge(): void {
+  if (badgeStarted || typeof document === 'undefined') return
+  badgeStarted = true
+  const page = routerPageUrl()
+  const el = document.createElement('div')
+  el.setAttribute('data-pxlblz-artnet-badge', '')
+  el.style.cssText = [
+    'position:fixed', 'left:10px', 'bottom:10px', 'z-index:2147483000',
+    'display:flex', 'align-items:center', 'gap:8px', 'padding:4px 8px',
+    'font:11px/1.3 ui-monospace,Consolas,monospace', 'color:#d8d8e0',
+    'background:rgba(16,16,22,.88)', 'border:1px solid #34343f', 'border-radius:6px',
+    'box-shadow:0 2px 8px rgba(0,0,0,.35)', 'user-select:none',
+  ].join(';')
+  const dot = document.createElement('span')
+  dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:#777;flex:none'
+  const label = document.createElement('span')
+  label.textContent = 'ArtNet'
+  label.style.cssText = 'font-weight:600;cursor:pointer'
+  label.title = 'Ein-/ausklappen'
+  const text = document.createElement('span')
+  const link = document.createElement('a')
+  link.href = page + '/'
+  link.target = '_blank'
+  link.rel = 'noopener'
+  link.textContent = 'Einstellungen ↗'
+  link.style.cssText = 'color:#8fb0ff;text-decoration:none'
+  el.append(dot, label, text, link)
+
+  let collapsed = false
+  try { collapsed = window.sessionStorage.getItem(BADGE_COLLAPSED_KEY) === '1' } catch { /* optional */ }
+  const applyCollapsed = () => {
+    text.style.display = collapsed ? 'none' : ''
+    link.style.display = collapsed ? 'none' : ''
+  }
+  label.addEventListener('click', () => {
+    collapsed = !collapsed
+    try { window.sessionStorage.setItem(BADGE_COLLAPSED_KEY, collapsed ? '1' : '0') } catch { /* optional */ }
+    applyCollapsed()
+  })
+  applyCollapsed()
+
+  let prev: RouterStatusDoc | null = null
+  const set = (color: string, msg: string, title: string) => {
+    dot.style.background = color
+    text.textContent = msg
+    el.title = title
+  }
+  const poll = async () => {
+    try {
+      const res = await fetch(page + '/status', { cache: 'no-store', signal: AbortSignal.timeout(1500) })
+      const st = (await res.json()) as RouterStatusDoc
+      const dt = prev ? st.uptime_s - prev.uptime_s : 0
+      const fps = prev && dt > 0 && st.rx_frames >= prev.rx_frames ? (st.rx_frames - prev.rx_frames) / dt : null
+      prev = st
+      const ctrls = st.controllers ?? []
+      const parts = [
+        fps === null ? 'Router ✓' : `${fps.toFixed(0)} Bilder/s`,
+        `${ctrls.length} Controller`,
+      ]
+      if (st.test_pattern) parts.push(`Test: ${st.test_pattern}`)
+      const flowing = fps !== null && fps > 1
+      set(st.test_pattern ? '#f0b44c' : flowing ? '#5fd38f' : '#f0b44c', parts.join(' · '),
+        ctrls.map(c => `${c.name} ${c.target_ip}${c.stale ? ' (kein Bild)' : ''}`).join('\n') || 'keine Controller')
+    } catch {
+      prev = null
+      set('#ff6b6b', 'Router nicht erreichbar', `Kein Router unter ${page} - Desktop-Verknüpfung „PXLBLZ-IDE - ArtNet“ starten`)
+    }
+  }
+  const mount = () => {
+    document.body.appendChild(el)
+    void poll()
+    window.setInterval(() => { void poll() }, 2000)
+  }
+  if (document.body) mount()
+  else document.addEventListener('DOMContentLoaded', mount, { once: true })
+}
+if (queryEnabled()) startArtNetBadge()
+
 export function createExternalPixelOutput(pixelCount: number): ExternalPixelOutput {
   const enabled = queryEnabled()
   const url = queryUrl()

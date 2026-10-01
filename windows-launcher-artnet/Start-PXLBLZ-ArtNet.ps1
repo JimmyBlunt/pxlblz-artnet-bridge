@@ -97,6 +97,13 @@ try {
         if ($owner.ExecutablePath -ne $routerExe -or -not $owner.CommandLine.Contains($routerConfig) -or $owner.CommandLine -match '--dry-run|--input\s+pattern') { throw "Port $wsPort gehoert nicht zum erwarteten Art-Net-Router mit $routerConfig (PID $ownerId). Der bestehende Prozess bleibt erhalten." }
     }
     Note "OK: Art-Net-Router, WebSocket $wsPort, $($launcherConfig.routerConfig)"
+    # The configuration page must be answered by this router (another program may share the port).
+    $pageOk = $false
+    for ($i = 0; $i -lt 10 -and -not $pageOk; $i++) {
+        try { $page = Invoke-WebRequest 'http://127.0.0.1:9988/status' -UseBasicParsing -TimeoutSec 3; $pageOk = [bool]$page.Headers['X-PXLBLZ-Router'] } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if ($pageOk) { Note 'OK: Einstellungsseite http://127.0.0.1:9988/' }
+    else { Note 'WARNUNG: Einstellungsseite http://127.0.0.1:9988/ antwortet nicht vom Router (Port von einem anderen Programm belegt?). Die Ausgabe laeuft trotzdem.' }
 
     $loginHelper = Join-Path $logDir 'Open-Local-IDE.mjs'
     if ($CheckOnly -or $NoOpen) {
