@@ -82,3 +82,25 @@ Router-seitig ausprobiert und **ohne Wirkung** (wieder entfernt):
 Kontrollmessung danach (Regenbogen, 20 s): ESP .248 **59,5 fps** an den LEDs, Teensy .253 60,0 fps
 vollständig empfangen / 30,0 fps an den LEDs (bis Option A–D), APA .251 **56,2 fps** an den LEDs
 (4,3 % WLAN-Verlust).
+
+### Nachtrag: Teensy auf 60, .251 umgestellt (2026-10-01)
+
+- **Teensy .253:** Ziel-FPS 60 (Option A) über seine API: `/api/stop` → `/api/config` →
+  `/api/save` → `/api/start` (ein paar Sekunden dunkel; vorherige Config gesichert in
+  `esp-config-backup\teensy-10.0.0.253-config-before-fps60-2026-10-01.json`).
+  Ergebnis: **34,1 fps an den LEDs** (vorher 30), DMA 29,3 ms, empfangen weiter 60/60 vollständig.
+- **.251 an einen anderen Platz gestellt:** Verlust unverändert (3,3–3,9 %, ~1 unvollständiger
+  Frame/s), Ping 0 % / 4–8 ms. Der Verlust hängt an der **Paketrate**, nicht am Funkweg:
+
+  | Pakete/s zum ESP | Verlust |
+  | --- | --- |
+  | .248 bei 60 fps (60/s) | 0 % |
+  | .251 bei 30 fps (180/s) | 0,2 % |
+  | .251 bei 60 fps (360/s) | ~4 % |
+
+  Typisch für den **WLAN-Stromsparmodus des ESP32** (Modem Sleep: der Access Point puffert und
+  liefert gebündelt, die kleinen Empfangspuffer laufen über). Abhilfe liegt in der **Firmware**
+  (`WiFi.setSleep(false)` / `esp_wifi_set_ps(WIFI_PS_NONE)`, mehr RX-Puffer) – Quellcode der
+  .251-Firmware liegt nicht im Repo – oder in einer Kabelverbindung.
+
+Stand an den LEDs bei 60 fps: .248 **59,3**, .253 **34,1**, .251 **57,3** fps.
