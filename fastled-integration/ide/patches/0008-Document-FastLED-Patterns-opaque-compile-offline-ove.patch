@@ -1,0 +1,82 @@
+From c3784d35e24a0289f8706216a6b409088c7edf67 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 04:58:25 +1000
+Subject: [PATCH 8/8] Document FastLED Patterns; opaque compile/offline overlay
+ (local #9002)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- CONTEXT.md: terms "FastLED Pattern" (local fork) and "FastLED compile
+  service", including what never happens to a FastLED Pattern (Controller,
+  Show, artifact, agent).
+- Technical Reference §10a: marker detection, compile/publication rule,
+  preview path and exact-byte argument, Controls persistence, limits.
+- Preview: the "Compiling FastLED Pattern..." / compiler-offline overlay
+  is opaque, so pixels of the previously open Pattern never show through.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest docs/catalog + Preview (11 passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CONTEXT.md                                   | 7 +++++++
+ docs/reference/PXLBLZ Technical Reference.md | 9 +++++++++
+ src/components/Preview.tsx                   | 2 +-
+ 3 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/CONTEXT.md b/CONTEXT.md
+index 7fd4d8c6..e58131d7 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -16,6 +16,13 @@ _Note_: "**Pixelblaze V2**" (and V3 Standard/Pico) names a *hardware controller
+ A source file in Pixelblaze's JavaScript-derived language that runs on a controller; also the LED display that results from running it. Authored by the user.
+ _Avoid_: program (the websocket API's term), sketch, script.
+ 
++**FastLED Pattern** (local fork):
++A **Pattern** written in C++ against the FastLED library instead of the Pixelblaze language, marked by the first-line directive `// @pxlblz-language fastled` (optional `// @pxlblz-dim 1|2|3` and `// @pxlblz-output wire|leds`). The marker rides in `src`, so storage, autosave and navigation treat it like any Pattern. PXLBLZ-IDE compiles it through the **FastLED compile service** to wasm and previews real FastLED in the browser; with external pixel output on, its exact wire bytes go to the LED router (Art-Net/Fadecandy). It is never sent to a **Controller**, never part of a **Show**, never bundled into an artifact, and the agent does not discover it. Its FastLED `UISlider`/`UICheckbox`/`UINumberField` elements are its **Controls**, persisted per Pattern by UI name.
++_Avoid_: sketch (FastLED's own word) in UI and docs; calling the LED router a Controller.
++
++**FastLED compile service**:
++The local helper (`fastled-integration/service/server.mjs`, default `http://127.0.0.1:9996`) that turns FastLED Pattern source plus defines (`PXLBLZ_NUM_LEDS` = the map's pixel count) into a wasm module and compiler diagnostics. Started by the Art-Net launcher; when it is not reachable the preview says so and the editor keeps saving.
++
+ **Library**:
+ A named collection of reusable global-scope functions and top-level state (the out-var contract: helpers that write shared globals like `ux`/`uy` for the caller to read immediately), referenced from Patterns as `Namespace.fn()`. Ordinary calls retain one runtime function call after the compiler flattens and mangles the reachable dependency graph. A single-return expression declared with `// @inline` also offers the explicit call-site form `Namespace.inline.fn()`: the compiler substitutes that expression, supports nested inline calls, retains reachable helper dependencies, and rejects arguments whose evaluation could be duplicated or reordered unsafely. The call site chooses the size/speed trade; the definition only declares eligibility. A library's top level holds only function declarations, `var` declarations, and comments — no executable statements. A library's name **is** its namespace: a single identifier-constrained field (case-sensitive, no spaces), unique across stock libraries, the user's own libraries, and **built-in** names. **Stock libraries** ship with the IDE (`SDF`, `Color`, `Anim`, `Coord`, `Noise`, `Shader`) and are read-only; **personal libraries** are user-owned and editable. References from Patterns are soft: nothing tracks which Patterns use a library — the name resolves at compile time, so renaming or deleting a library leaves dependent Patterns failing compile with an unknown-namespace error until their call sites are updated. A library's API documentation is generated from the `//` comments directly above each function declaration; eligible functions also expose their inline signature.
+ _Avoid_: module, package, import; separate display name vs namespace (they are one field).
+diff --git a/docs/reference/PXLBLZ Technical Reference.md b/docs/reference/PXLBLZ Technical Reference.md
+index d7eee124..c00b8d5f 100644
+--- a/docs/reference/PXLBLZ Technical Reference.md	
++++ b/docs/reference/PXLBLZ Technical Reference.md	
+@@ -435,6 +435,15 @@ readouts share the same snapshots.
+ 
+ ---
+ 
++## 10a. FastLED Patterns (local fork)
++
++A FastLED Pattern is detected by `patternLanguage(src)` (`src/engine/patternLanguage.ts`): the leading comment block (at most 20 lines) carries `// @pxlblz-language fastled`. No schema change; `isFastLedSource` guards every Pixelblaze-only path (Send to Controller gate and push, saved-artifact reconciliation, saved-program matching, Show pickers and `compileShowForPreview` / v2 stage preparation via `showFastLedGuard.ts`, agent discovery, Copy/.epe).
++
++- Compile: `fastledStore` posts `{source, defines}` to the FastLED compile service (`fastledCompileClient.ts`, override `?fastledService=`), caches `WebAssembly.Module`s per (source, defines) and publishes `previewSource` only after a successful compile of the still-current buffer of the same Pattern; errors set `compileStatus` broken and become Monaco markers (owner `fastled`). Offline: `serviceStatus` offline, retry with backoff, `compileStatus` untouched.
++- Preview: `Preview.tsx` resolves the layout with the `@pxlblz-dim` dimension, passes `PXLBLZ_NUM_LEDS` (and `PXLBLZ_WIDTH/HEIGHT` for regular grids), instantiates the vendored host (`src/engine/fastled/fastledWasmHost.ts`, ABI 1) and drives `createFastLedPatternHandle` through the shared `startLoop` (fast shim always). `beforeRender(dt)` runs `frame(dt)`; `render*(i)` emits byte/255 of L2 wire bytes (default, RGB order after brightness/correction/dither) or L1 `leds[]`. byte/255 → `Math.round(v*255)` is exact, so the packed frame and the router receive FastLED's bytes (golden test: 0 differing bytes against the native FastLED reference).
++- Controls: FastLED UI elements map to ranged slider/toggle Controls (`PatternMetadata.controls[].range`); values persist in `PatternRecord.controls` (`controls_json`) keyed by UI name.
++- Limits: main-thread wasm; the host's loop/show budget catches runaway loops that call `millis/delay/show`, but a pure `while(true){}` still freezes the tab. Playlists (sequencing Pixelblaze and FastLED Patterns with cuts/crossfades) are a planned follow-up.
++
+ # Part 3 — Maps and spatial presentation
+ 
+ ## 11. Map source and persistence
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index 97a69cb2..f67557d8 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -818,7 +818,7 @@ export function Preview({
+               aria-live="polite"
+               data-testid="preview-fastled-status"
+               data-state={fastLedNotice}
+-              className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/90 p-6 pointer-events-none"
++              className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950 p-6 pointer-events-none"
+             >
+               <div className="max-w-xs text-center font-mono">
+                 {fastLedNotice === 'compiling' ? (
+-- 
+2.55.0.windows.3
+

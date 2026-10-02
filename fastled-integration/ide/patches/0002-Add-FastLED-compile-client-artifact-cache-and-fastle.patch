@@ -1,0 +1,789 @@
+From 6d922c7e202a3cd0984d615f14cba8ab55f791c2 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 00:31:45 +1000
+Subject: [PATCH 2/8] Add FastLED compile client, artifact cache and
+ fastledStore (local #9002)
+
+- fastledCompileClient.ts: POST /compile {source, defines} to the local
+  FastLED compile service (default http://127.0.0.1:9996, per-tab override
+  ?fastledService=), base64 wasm decode, diagnostics normalised to 1-based
+  Pattern lines (header diagnostics land on line 1 with file:line), offline
+  classification, /health probe.
+- fastledArtifactCache.ts: LRU of compiled WebAssembly.Modules (and failures)
+  keyed by (source, defines).
+- fastledStore.ts: debounced, superseding edit compiles; only a successful
+  compile of the still-current buffer of the same Pattern publishes
+  previewSource (compileStatus good); errors set broken and keep the last
+  working preview; a reopened unexecutable source becomes unavailable.
+  Offline: compileStatus untouched, serviceStatus offline, retry with backoff.
+- patternStore.updatePatternControls: sparse-merge persisted Control values
+  into PatternRecord.controls (controls_json), no updatedAt bump.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest fastledStore + patternStore + src/engine/fastled (57 passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/engine/fastled/fastledArtifactCache.ts    |  46 ++++
+ .../fastled/fastledCompileClient.test.ts      |  94 ++++++++
+ src/engine/fastled/fastledCompileClient.ts    | 156 +++++++++++++
+ src/store/fastledStore.test.ts                | 146 +++++++++++++
+ src/store/fastledStore.ts                     | 205 ++++++++++++++++++
+ src/store/patternStore.test.ts                |  20 ++
+ src/store/patternStore.ts                     |  19 ++
+ 7 files changed, 686 insertions(+)
+ create mode 100644 src/engine/fastled/fastledArtifactCache.ts
+ create mode 100644 src/engine/fastled/fastledCompileClient.test.ts
+ create mode 100644 src/engine/fastled/fastledCompileClient.ts
+ create mode 100644 src/store/fastledStore.test.ts
+ create mode 100644 src/store/fastledStore.ts
+
+diff --git a/src/engine/fastled/fastledArtifactCache.ts b/src/engine/fastled/fastledArtifactCache.ts
+new file mode 100644
+index 00000000..c67a0b97
+--- /dev/null
++++ b/src/engine/fastled/fastledArtifactCache.ts
+@@ -0,0 +1,46 @@
++// Compiled FastLED Pattern artifacts, keyed by (source, defines). A small LRU:
++// editing produces one entry per compiled buffer, a pixel-count change one per
++// map size. Failed compiles are cached too, so an unchanged broken source does
++// not hit the service again.
++import type { FastLedDefines, FastLedDiagnostic } from './fastledCompileClient'
++
++export type FastLedArtifact =
++  | { ok: true; module: WebAssembly.Module; diagnostics: FastLedDiagnostic[] }
++  | { ok: false; message: string; diagnostics: FastLedDiagnostic[] }
++
++const MAX_ENTRIES = 16
++
++export function fastLedArtifactKey(source: string, defines: FastLedDefines): string {
++  const sorted = Object.keys(defines).sort().map((k) => [k, defines[k]])
++  return JSON.stringify([source, sorted])
++}
++
++export function createFastLedArtifactCache(maxEntries = MAX_ENTRIES) {
++  const entries = new Map<string, FastLedArtifact>()
++  return {
++    get(source: string, defines: FastLedDefines): FastLedArtifact | undefined {
++      const key = fastLedArtifactKey(source, defines)
++      const hit = entries.get(key)
++      if (hit) {
++        // Refresh recency.
++        entries.delete(key)
++        entries.set(key, hit)
++      }
++      return hit
++    },
++    set(source: string, defines: FastLedDefines, artifact: FastLedArtifact): void {
++      const key = fastLedArtifactKey(source, defines)
++      entries.delete(key)
++      entries.set(key, artifact)
++      while (entries.size > maxEntries) entries.delete(entries.keys().next().value as string)
++    },
++    clear(): void {
++      entries.clear()
++    },
++    get size(): number {
++      return entries.size
++    },
++  }
++}
++
++export type FastLedArtifactCache = ReturnType<typeof createFastLedArtifactCache>
+diff --git a/src/engine/fastled/fastledCompileClient.test.ts b/src/engine/fastled/fastledCompileClient.test.ts
+new file mode 100644
+index 00000000..43ddfd08
+--- /dev/null
++++ b/src/engine/fastled/fastledCompileClient.test.ts
+@@ -0,0 +1,94 @@
++import { describe, expect, it, vi } from 'vitest'
++import {
++  base64ToBytes,
++  checkFastLedService,
++  compileFastLed,
++  DEFAULT_FASTLED_SERVICE_URL,
++  FastLedServiceOfflineError,
++  fastLedServiceUrl,
++  normalizeFastLedDiagnostics,
++} from './fastledCompileClient'
++
++const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
++
++describe('compileFastLed', () => {
++  it('posts source and defines and decodes the base64 wasm', async () => {
++    const fetch = vi.fn(async () => json({ ok: true, key: 'k1', cached: true, wasm: btoa('\0asm'), diagnostics: [] }))
++    const result = await compileFastLed({ source: 'x', defines: { PXLBLZ_NUM_LEDS: 12 } }, { baseUrl: 'http://svc', fetch })
++    expect(fetch).toHaveBeenCalledWith('http://svc/compile', expect.objectContaining({ method: 'POST' }))
++    const init = (fetch.mock.calls[0] as unknown as [string, RequestInit])[1]
++    expect(JSON.parse(init.body as string)).toEqual({ source: 'x', defines: { PXLBLZ_NUM_LEDS: 12 } })
++    expect(result).toMatchObject({ ok: true, key: 'k1', cached: true })
++    expect(result.ok && Array.from(result.wasm)).toEqual([0, 0x61, 0x73, 0x6d])
++  })
++
++  it('returns normalised diagnostics and a first-error message on failure', async () => {
++    const fetch = vi.fn(async () => json({
++      ok: false,
++      diagnostics: [
++        { file: 'sketch.ino', line: 10, col: 32, severity: 'error', message: "use of undeclared identifier 'hue'", inSketch: true },
++        { file: 'FastLED.h', line: 3, col: 1, severity: 'warning', message: 'deprecated', inSketch: false },
++      ],
++    }))
++    const result = await compileFastLed({ source: 'x', defines: {} }, { baseUrl: 'http://svc', fetch })
++    expect(result).toEqual({
++      ok: false,
++      message: "Line 10: use of undeclared identifier 'hue'",
++      diagnostics: [
++        { line: 10, column: 32, severity: 'error', message: "use of undeclared identifier 'hue'" },
++        { line: 1, column: 1, severity: 'warning', message: 'FastLED.h:3: deprecated' },
++      ],
++    })
++  })
++
++  it('classifies a rejected fetch as offline and passes aborts through', async () => {
++    await expect(compileFastLed({ source: 'x', defines: {} }, {
++      baseUrl: 'http://svc', fetch: async () => { throw new TypeError('Failed to fetch') },
++    })).rejects.toBeInstanceOf(FastLedServiceOfflineError)
++    const abort = new DOMException('aborted', 'AbortError')
++    await expect(compileFastLed({ source: 'x', defines: {} }, {
++      baseUrl: 'http://svc', fetch: async () => { throw abort },
++    })).rejects.toBe(abort)
++  })
++
++  it('reports a non-JSON answer as a compile failure', async () => {
++    const result = await compileFastLed({ source: 'x', defines: {} }, { baseUrl: 'http://svc', fetch: async () => new Response('oops', { status: 502 }) })
++    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('HTTP 502') })
++  })
++})
++
++describe('service URL and health', () => {
++  it('defaults to the local service and accepts ?fastledService=', () => {
++    const mem = new Map<string, string>()
++    vi.stubGlobal('sessionStorage', {
++      getItem: (k: string) => mem.get(k) ?? null,
++      setItem: (k: string, v: string) => { mem.set(k, v) },
++      removeItem: (k: string) => { mem.delete(k) },
++    })
++    expect(fastLedServiceUrl('')).toBe(DEFAULT_FASTLED_SERVICE_URL)
++    expect(fastLedServiceUrl('?fastledService=http://127.0.0.1:9999/')).toBe('http://127.0.0.1:9999')
++    // Remembered for the session.
++    expect(fastLedServiceUrl('')).toBe('http://127.0.0.1:9999')
++    expect(fastLedServiceUrl('?fastledService=javascript:alert(1)')).toBe('http://127.0.0.1:9999')
++    vi.unstubAllGlobals()
++  })
++
++  it('probes /health', async () => {
++    expect(await checkFastLedService({ baseUrl: 'http://svc', fetch: async () => json({ ok: true }) })).toBe(true)
++    expect(await checkFastLedService({ baseUrl: 'http://svc', fetch: async () => { throw new TypeError('x') } })).toBe(false)
++  })
++})
++
++describe('helpers', () => {
++  it('drops malformed diagnostics and clamps positions', () => {
++    expect(normalizeFastLedDiagnostics([null, { message: '' }, { line: 0, message: 'm', severity: 'fatal' }, { line: 4, message: 'n', severity: 'note' }])).toEqual([
++      { line: 1, column: 1, severity: 'error', message: 'm' },
++      { line: 4, column: 1, severity: 'info', message: 'n' },
++    ])
++    expect(normalizeFastLedDiagnostics('nope')).toEqual([])
++  })
++
++  it('decodes base64', () => {
++    expect(Array.from(base64ToBytes(btoa('AB')))).toEqual([65, 66])
++  })
++})
+diff --git a/src/engine/fastled/fastledCompileClient.ts b/src/engine/fastled/fastledCompileClient.ts
+new file mode 100644
+index 00000000..8906edb5
+--- /dev/null
++++ b/src/engine/fastled/fastledCompileClient.ts
+@@ -0,0 +1,156 @@
++// Client for the local FastLED compile service (fastled-integration
++// service/server.mjs, default http://127.0.0.1:9996). The service turns a
++// FastLED Pattern's C++ into a wasm module; PXLBLZ-IDE never compiles C++ itself.
++//
++// The URL can be overridden per tab with `?fastledService=<url>` (kept in
++// sessionStorage like the other session preferences).
++
++export const DEFAULT_FASTLED_SERVICE_URL = 'http://127.0.0.1:9996'
++const SESSION_KEY = 'pxlblz.fastledService'
++
++export type FastLedDefines = Record<string, number | string | boolean>
++
++export interface FastLedDiagnostic {
++  /** 1-based line in the Pattern source. */
++  line: number
++  /** 1-based column. */
++  column: number
++  severity: 'error' | 'warning' | 'info'
++  message: string
++}
++
++export type FastLedCompileResult =
++  | { ok: true; wasm: Uint8Array; key: string | null; cached: boolean; diagnostics: FastLedDiagnostic[] }
++  | { ok: false; diagnostics: FastLedDiagnostic[]; message: string }
++
++/** The service could not be reached (not started, wrong port, CORS refusal). */
++export class FastLedServiceOfflineError extends Error {
++  readonly url: string
++  constructor(url: string, cause?: unknown) {
++    super(`FastLED compile service not reachable at ${url}`)
++    this.name = 'FastLedServiceOfflineError'
++    this.url = url
++    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
++  }
++}
++
++function sessionStore(): Storage | null {
++  try {
++    return typeof sessionStorage === 'undefined' ? null : sessionStorage
++  } catch {
++    return null
++  }
++}
++
++export function fastLedServiceUrl(search: string = typeof location === 'undefined' ? '' : location.search): string {
++  const store = sessionStore()
++  try {
++    const fromQuery = new URLSearchParams(search).get('fastledService')
++    if (fromQuery && /^https?:\/\//i.test(fromQuery)) {
++      store?.setItem(SESSION_KEY, fromQuery)
++      return fromQuery.replace(/\/+$/, '')
++    }
++  } catch {
++    // Malformed query: fall through to the stored or default URL.
++  }
++  const stored = store?.getItem(SESSION_KEY)
++  return (stored && /^https?:\/\//i.test(stored) ? stored : DEFAULT_FASTLED_SERVICE_URL).replace(/\/+$/, '')
++}
++
++function severity(value: unknown): FastLedDiagnostic['severity'] {
++  const s = String(value ?? '').toLowerCase()
++  return s.startsWith('err') || s === 'fatal' ? 'error' : s.startsWith('warn') ? 'warning' : 'info'
++}
++
++/**
++ * Service diagnostics ({file, line, col, severity, message}) → editor markers.
++ * The service already maps lines to the Pattern; anything located elsewhere
++ * (a FastLED header) lands on line 1 with its file:line prefixed.
++ */
++export function normalizeFastLedDiagnostics(raw: unknown): FastLedDiagnostic[] {
++  if (!Array.isArray(raw)) return []
++  return raw.flatMap((d): FastLedDiagnostic[] => {
++    if (!d || typeof d !== 'object') return []
++    const r = d as Record<string, unknown>
++    const message = String(r.message ?? '').trim()
++    if (!message) return []
++    const file = typeof r.file === 'string' ? r.file : ''
++    const line = Number(r.line)
++    const col = Number(r.col ?? r.column)
++    const inSketch = typeof r.inSketch === 'boolean' ? r.inSketch : file === '' || /^sketch\.(ino|cpp)$/i.test(file)
++    if (!inSketch || !(line >= 1)) {
++      return [{
++        line: 1,
++        column: 1,
++        severity: severity(r.severity),
++        message: file && line >= 1 ? `${file}:${line}: ${message}` : message,
++      }]
++    }
++    return [{ line: Math.floor(line), column: col >= 1 ? Math.floor(col) : 1, severity: severity(r.severity), message }]
++  })
++}
++
++export function base64ToBytes(b64: string): Uint8Array {
++  const bin = atob(b64)
++  const out = new Uint8Array(bin.length)
++  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
++  return out
++}
++
++type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
++
++export async function compileFastLed(
++  request: { source: string; defines: FastLedDefines },
++  options: { signal?: AbortSignal; baseUrl?: string; fetch?: FetchLike } = {},
++): Promise<FastLedCompileResult> {
++  const baseUrl = options.baseUrl ?? fastLedServiceUrl()
++  const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init))
++  let res: Response
++  try {
++    res = await doFetch(`${baseUrl}/compile`, {
++      method: 'POST',
++      headers: { 'content-type': 'application/json', accept: 'application/json' },
++      body: JSON.stringify({ source: request.source, defines: request.defines }),
++      signal: options.signal,
++    })
++  } catch (err) {
++    if (err instanceof DOMException && err.name === 'AbortError') throw err
++    if (err instanceof Error && err.name === 'AbortError') throw err
++    throw new FastLedServiceOfflineError(baseUrl, err)
++  }
++  let body: Record<string, unknown>
++  try {
++    body = (await res.json()) as Record<string, unknown>
++  } catch {
++    return { ok: false, diagnostics: [], message: `FastLED compile service answered HTTP ${res.status} without JSON` }
++  }
++  const diagnostics = normalizeFastLedDiagnostics(body.diagnostics)
++  if (body.ok === true && typeof body.wasm === 'string') {
++    return {
++      ok: true,
++      wasm: base64ToBytes(body.wasm),
++      key: typeof body.key === 'string' ? body.key : null,
++      cached: body.cached === true,
++      diagnostics,
++    }
++  }
++  const firstError = diagnostics.find((d) => d.severity === 'error')
++  const message = typeof body.error === 'string' && body.error
++    ? body.error
++    : firstError
++      ? `Line ${firstError.line}: ${firstError.message}`
++      : `FastLED compile failed (HTTP ${res.status})`
++  return { ok: false, diagnostics, message }
++}
++
++/** True when GET /health answers; used for the offline retry probe. */
++export async function checkFastLedService(options: { baseUrl?: string; fetch?: FetchLike; signal?: AbortSignal } = {}): Promise<boolean> {
++  const baseUrl = options.baseUrl ?? fastLedServiceUrl()
++  const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init))
++  try {
++    const res = await doFetch(`${baseUrl}/health`, { signal: options.signal })
++    return res.ok
++  } catch {
++    return false
++  }
++}
+diff --git a/src/store/fastledStore.test.ts b/src/store/fastledStore.test.ts
+new file mode 100644
+index 00000000..66c4e3db
+--- /dev/null
++++ b/src/store/fastledStore.test.ts
+@@ -0,0 +1,146 @@
++import { readFileSync } from 'node:fs'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import { editorInitialState, useEditorStore } from './editorStore'
++import { patternInitialState, usePatternStore } from './patternStore'
++import {
++  __resetFastLedStoreForTests,
++  __settleFastLedCompilesForTests,
++  FASTLED_EDIT_DEBOUNCE_MS,
++  useFastLedStore,
++} from './fastledStore'
++import { FastLedServiceOfflineError, type FastLedCompileResult } from '@/engine/fastled/fastledCompileClient'
++
++const compileMock = vi.hoisted(() => vi.fn())
++vi.mock('@/engine/fastled/fastledCompileClient', async (importOriginal) => ({
++  ...(await importOriginal<typeof import('@/engine/fastled/fastledCompileClient')>()),
++  compileFastLed: compileMock,
++}))
++
++const WASM = new Uint8Array(readFileSync(new URL('../engine/fastled/__fixtures__/template64.wasm', import.meta.url)))
++const DEFINES = { PXLBLZ_NUM_LEDS: 64 }
++const GOOD = '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid setup(){}\nvoid loop(){}\n'
++const BROKEN = '// @pxlblz-language fastled\nvoid loop() { nope(); }\n'
++
++const ok = (): FastLedCompileResult => ({ ok: true, wasm: WASM, key: 'k', cached: false, diagnostics: [] })
++const fail = (): FastLedCompileResult => ({
++  ok: false,
++  message: 'Line 2: nope',
++  diagnostics: [{ line: 2, column: 15, severity: 'error', message: "use of undeclared identifier 'nope'" }],
++})
++
++function openBuffer(source: string, previewSource = '') {
++  usePatternStore.setState({ ...patternInitialState, activePatternId: 'p1' })
++  useEditorStore.setState({ ...editorInitialState, editorFlavor: 'pattern', isReadOnly: false, source, previewSource })
++}
++
++beforeEach(() => {
++  __resetFastLedStoreForTests()
++  compileMock.mockReset()
++})
++
++afterEach(() => {
++  vi.useRealTimers()
++})
++
++describe('fastledStore publication rule', () => {
++  it('publishes previewSource and good status for a successful compile of the current buffer', async () => {
++    compileMock.mockResolvedValue(ok())
++    openBuffer(GOOD, 'old')
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    expect(useFastLedStore.getState().compilingSource).toBe(GOOD)
++    await __settleFastLedCompilesForTests()
++    expect(compileMock).toHaveBeenCalledWith({ source: GOOD, defines: DEFINES }, expect.anything())
++    expect(useEditorStore.getState()).toMatchObject({ previewSource: GOOD, compileStatus: 'good' })
++    expect(useFastLedStore.getState()).toMatchObject({ compilingSource: null, serviceStatus: 'online', diagnosticsSource: GOOD })
++    expect(useFastLedStore.getState().getArtifact(GOOD, DEFINES)?.ok).toBe(true)
++  })
++
++  it('keeps the last working preview and marks the buffer broken on errors', async () => {
++    compileMock.mockResolvedValue(fail())
++    openBuffer(BROKEN, GOOD)
++    useFastLedStore.getState().requestCompile(BROKEN, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    expect(useEditorStore.getState()).toMatchObject({ previewSource: GOOD, compileStatus: 'broken', previewUnavailableReason: null })
++    expect(useFastLedStore.getState().diagnostics).toEqual(fail().diagnostics)
++  })
++
++  it('makes a reopened unexecutable source explicitly unavailable', async () => {
++    compileMock.mockResolvedValue(fail())
++    openBuffer(BROKEN, BROKEN)
++    useFastLedStore.getState().requestCompile(BROKEN, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    expect(useEditorStore.getState()).toMatchObject({ previewSource: '', previewUnavailableReason: 'broken-source', compileStatus: 'broken' })
++  })
++
++  it('does not publish when the buffer or the Pattern changed meanwhile', async () => {
++    compileMock.mockResolvedValue(ok())
++    openBuffer(GOOD, 'old')
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    useEditorStore.setState({ source: `${GOOD}// more` })
++    await __settleFastLedCompilesForTests()
++    expect(useEditorStore.getState().previewSource).toBe('old')
++
++    __resetFastLedStoreForTests()
++    openBuffer(GOOD, 'old')
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    usePatternStore.setState({ activePatternId: 'p2' })
++    await __settleFastLedCompilesForTests()
++    expect(useEditorStore.getState().previewSource).toBe('old')
++    // The artifact still lands in the cache for the preview.
++    expect(useFastLedStore.getState().getArtifact(GOOD, DEFINES)?.ok).toBe(true)
++  })
++
++  it('serves cache hits without another fetch', async () => {
++    compileMock.mockResolvedValue(ok())
++    openBuffer(GOOD)
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    expect(compileMock).toHaveBeenCalledTimes(1)
++  })
++
++  it('debounces edits against lastDefines and aborts a superseded edit compile', async () => {
++    vi.useFakeTimers()
++    const signals: AbortSignal[] = []
++    compileMock.mockImplementation((_req: unknown, opts: { signal: AbortSignal }) => {
++      signals.push(opts.signal)
++      return new Promise(() => {})
++    })
++    openBuffer(GOOD)
++    useFastLedStore.getState().requestCompile(GOOD)
++    vi.advanceTimersByTime(FASTLED_EDIT_DEBOUNCE_MS * 2)
++    expect(compileMock).not.toHaveBeenCalled() // no layout resolved yet
++    useFastLedStore.getState().setLastDefines(DEFINES)
++    useFastLedStore.getState().requestCompile('// @pxlblz-language fastled\n// a')
++    useFastLedStore.getState().requestCompile('// @pxlblz-language fastled\n// ab')
++    vi.advanceTimersByTime(FASTLED_EDIT_DEBOUNCE_MS)
++    expect(compileMock).toHaveBeenCalledTimes(1)
++    useFastLedStore.getState().requestCompile('// @pxlblz-language fastled\n// abc')
++    vi.advanceTimersByTime(FASTLED_EDIT_DEBOUNCE_MS)
++    expect(compileMock).toHaveBeenCalledTimes(2)
++    expect(signals[0].aborted).toBe(true)
++    expect(signals[1].aborted).toBe(false)
++  })
++
++  it('ignores Pixelblaze sources', () => {
++    openBuffer('export function render(i) {}')
++    useFastLedStore.getState().requestCompile('export function render(i) {}', DEFINES, { immediate: true })
++    expect(compileMock).not.toHaveBeenCalled()
++  })
++
++  it('goes offline without touching compileStatus and retries until the service answers', async () => {
++    vi.useFakeTimers()
++    compileMock.mockRejectedValueOnce(new FastLedServiceOfflineError('http://127.0.0.1:9996')).mockResolvedValue(ok())
++    openBuffer(GOOD, GOOD)
++    useEditorStore.setState({ compileStatus: 'good' })
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    await vi.waitFor(() => expect(useFastLedStore.getState().serviceStatus).toBe('offline'))
++    expect(useEditorStore.getState().compileStatus).toBe('good')
++    await vi.advanceTimersByTimeAsync(2000)
++    await vi.waitFor(() => expect(useFastLedStore.getState().serviceStatus).toBe('online'))
++    await __settleFastLedCompilesForTests()
++    expect(compileMock).toHaveBeenCalledTimes(2)
++    expect(useFastLedStore.getState().getArtifact(GOOD, DEFINES)?.ok).toBe(true)
++  })
++})
+diff --git a/src/store/fastledStore.ts b/src/store/fastledStore.ts
+new file mode 100644
+index 00000000..a778c85c
+--- /dev/null
++++ b/src/store/fastledStore.ts
+@@ -0,0 +1,205 @@
++// Async compilation of FastLED Patterns through the local compile service.
++//
++// Publication rule (mirrors the Pixelblaze debounce in Editor.tsx): only a
++// successful compile of the *still current* buffer of the *same* Pattern
++// publishes previewSource and sets compileStatus 'good'; a failed compile sets
++// 'broken' and never replaces the running preview, so "last working preview"
++// behaves exactly as for Pixelblaze. Reopening a saved FastLED Pattern that does
++// not compile makes the preview explicitly unavailable (#818 rule).
++//
++// When the service is not reachable, compileStatus is left alone (autosave keeps
++// working), serviceStatus turns 'offline' and the latest request retries with
++// backoff until the service answers.
++import { create } from 'zustand'
++import { useEditorStore } from './editorStore'
++import { usePatternStore } from './patternStore'
++import { isFastLedSource } from '@/engine/patternLanguage'
++import {
++  compileFastLed,
++  FastLedServiceOfflineError,
++  fastLedServiceUrl,
++  type FastLedDefines,
++  type FastLedDiagnostic,
++} from '@/engine/fastled/fastledCompileClient'
++import {
++  createFastLedArtifactCache,
++  fastLedArtifactKey,
++  type FastLedArtifact,
++} from '@/engine/fastled/fastledArtifactCache'
++
++export type FastLedServiceStatus = 'unknown' | 'online' | 'offline'
++
++export const FASTLED_EDIT_DEBOUNCE_MS = 700
++const RETRY_MIN_MS = 2000
++const RETRY_MAX_MS = 15000
++
++interface FastLedState {
++  serviceStatus: FastLedServiceStatus
++  serviceUrl: string
++  /** Source of the newest in-flight compile (drives the working badge). */
++  compilingSource: string | null
++  /** Diagnostics of the last finished compile of `diagnosticsSource`. */
++  diagnosticsSource: string | null
++  diagnostics: FastLedDiagnostic[]
++  /** Bumped whenever an artifact (or failure) lands in the cache. */
++  artifactVersion: number
++  /** Defines of the layout the preview last resolved (PXLBLZ_NUM_LEDS, ...). */
++  lastDefines: FastLedDefines | null
++  setLastDefines: (defines: FastLedDefines) => void
++  /**
++   * Compile `source` against `defines` (default: lastDefines). Edits are
++   * debounced and supersede each other; `immediate` skips the debounce.
++   */
++  requestCompile: (source: string, defines?: FastLedDefines | null, options?: { immediate?: boolean }) => void
++  getArtifact: (source: string, defines: FastLedDefines) => FastLedArtifact | undefined
++}
++
++const cache = createFastLedArtifactCache()
++const inflight = new Map<string, Promise<void>>()
++let debounceTimer: ReturnType<typeof setTimeout> | null = null
++let editAbort: AbortController | null = null
++let retryTimer: ReturnType<typeof setTimeout> | null = null
++let retryDelay = RETRY_MIN_MS
++
++export const fastLedStoreInitialState = {
++  serviceStatus: 'unknown' as FastLedServiceStatus,
++  serviceUrl: '',
++  compilingSource: null as string | null,
++  diagnosticsSource: null as string | null,
++  diagnostics: [] as FastLedDiagnostic[],
++  artifactVersion: 0,
++  lastDefines: null as FastLedDefines | null,
++}
++
++/** Test-only: drop cache, timers and in-flight bookkeeping. */
++export function __resetFastLedStoreForTests(): void {
++  cache.clear()
++  inflight.clear()
++  if (debounceTimer) clearTimeout(debounceTimer)
++  if (retryTimer) clearTimeout(retryTimer)
++  debounceTimer = null
++  retryTimer = null
++  editAbort = null
++  retryDelay = RETRY_MIN_MS
++  useFastLedStore.setState({ ...fastLedStoreInitialState })
++}
++
++function sameDefines(a: FastLedDefines | null, b: FastLedDefines): boolean {
++  return a !== null && fastLedArtifactKey('', a) === fastLedArtifactKey('', b)
++}
++
++// The compile result reaches the editor only for the exact buffer of the same
++// Pattern that asked for it.
++function applyResult(source: string, artifact: FastLedArtifact, requestedFor: string | null): void {
++  useFastLedStore.setState((s) => ({
++    artifactVersion: s.artifactVersion + 1,
++    compilingSource: s.compilingSource === source ? null : s.compilingSource,
++  }))
++  const editor = useEditorStore.getState()
++  const activePatternId = usePatternStore.getState().activePatternId
++  if (
++    editor.editorFlavor !== 'pattern'
++    || editor.source !== source
++    || activePatternId === null
++    || activePatternId !== requestedFor
++  ) return
++  useFastLedStore.setState({ diagnosticsSource: source, diagnostics: artifact.diagnostics })
++  if (artifact.ok) {
++    editor.setCompileStatus('good')
++    if (editor.previewSource !== source) editor.setPreviewSource(source)
++  } else {
++    editor.setCompileStatus('broken')
++    if (editor.previewSource === source) editor.setPreviewUnavailable('broken-source')
++  }
++}
++
++function stillWanted(source: string): boolean {
++  const editor = useEditorStore.getState()
++  return editor.source === source || editor.previewSource === source
++}
++
++function scheduleRetry(source: string, defines: FastLedDefines): void {
++  if (retryTimer) clearTimeout(retryTimer)
++  const delay = retryDelay
++  retryDelay = Math.min(RETRY_MAX_MS, retryDelay * 2)
++  retryTimer = setTimeout(() => {
++    retryTimer = null
++    if (!stillWanted(source) || !isFastLedSource(source)) return
++    runCompile(source, defines, false)
++  }, delay)
++}
++
++function runCompile(source: string, defines: FastLedDefines, isEdit: boolean): void {
++  const hit = cache.get(source, defines)
++  const requestedFor = usePatternStore.getState().activePatternId
++  if (hit) {
++    applyResult(source, hit, requestedFor)
++    return
++  }
++  const key = fastLedArtifactKey(source, defines)
++  if (inflight.has(key)) return
++  let signal: AbortSignal | undefined
++  if (isEdit) {
++    editAbort?.abort()
++    editAbort = new AbortController()
++    signal = editAbort.signal
++  }
++  const serviceUrl = fastLedServiceUrl()
++  useFastLedStore.setState({ compilingSource: source, serviceUrl })
++  const job = (async () => {
++    try {
++      const result = await compileFastLed({ source, defines }, { signal, baseUrl: serviceUrl })
++      retryDelay = RETRY_MIN_MS
++      useFastLedStore.setState({ serviceStatus: 'online' })
++      let artifact: FastLedArtifact
++      if (result.ok) {
++        try {
++          const module = await WebAssembly.compile(result.wasm as BufferSource)
++          artifact = { ok: true, module, diagnostics: result.diagnostics }
++        } catch (err) {
++          artifact = { ok: false, message: `FastLED module rejected: ${err instanceof Error ? err.message : String(err)}`, diagnostics: result.diagnostics }
++        }
++      } else {
++        artifact = { ok: false, message: result.message, diagnostics: result.diagnostics }
++      }
++      cache.set(source, defines, artifact)
++      applyResult(source, artifact, requestedFor)
++    } catch (err) {
++      useFastLedStore.setState((s) => ({ compilingSource: s.compilingSource === source ? null : s.compilingSource }))
++      if (err instanceof FastLedServiceOfflineError) {
++        useFastLedStore.setState((s) => ({ serviceStatus: 'offline', artifactVersion: s.artifactVersion + 1 }))
++        scheduleRetry(source, defines)
++      }
++      // AbortError: superseded by a newer edit; nothing to report.
++    } finally {
++      inflight.delete(key)
++    }
++  })()
++  inflight.set(key, job)
++}
++
++export const useFastLedStore = create<FastLedState>()((set, get) => ({
++  ...fastLedStoreInitialState,
++  setLastDefines: (defines) => {
++    if (!sameDefines(get().lastDefines, defines)) set({ lastDefines: { ...defines } })
++  },
++  requestCompile: (source, defines, options = {}) => {
++    const resolved = defines ?? get().lastDefines
++    if (!resolved || !isFastLedSource(source)) return
++    if (options.immediate) {
++      runCompile(source, resolved, false)
++      return
++    }
++    if (debounceTimer) clearTimeout(debounceTimer)
++    debounceTimer = setTimeout(() => {
++      debounceTimer = null
++      runCompile(source, resolved, true)
++    }, FASTLED_EDIT_DEBOUNCE_MS)
++  },
++  getArtifact: (source, defines) => cache.get(source, defines),
++}))
++
++/** Test seam: wait until every in-flight compile settled. */
++export async function __settleFastLedCompilesForTests(): Promise<void> {
++  while (inflight.size > 0) await Promise.all([...inflight.values()])
++}
+diff --git a/src/store/patternStore.test.ts b/src/store/patternStore.test.ts
+index 9e1c2e12..4f1d9fcc 100644
+--- a/src/store/patternStore.test.ts
++++ b/src/store/patternStore.test.ts
+@@ -203,6 +203,26 @@ describe('updatePatternSettings', () => {
+   })
+ })
+ 
++describe('updatePatternControls (FastLED Control values)', () => {
++  beforeEach(() => {
++    usePatternStore.setState({
++      userPatterns: [{ id: 'p1', name: 'P1', src: '', controls: { Speed: 10 }, updatedAt: 1 }],
++    })
++  })
++
++  it('sparse-merges values into the record controls without bumping updatedAt', async () => {
++    await usePatternStore.getState().updatePatternControls('p1', { Glitter: 0 })
++    await usePatternStore.getState().updatePatternControls('p1', { Speed: 42 })
++    expect(usePatternStore.getState().userPatterns[0]).toMatchObject({ controls: { Speed: 42, Glitter: 0 }, updatedAt: 1 })
++  })
++
++  it('keeps the record identity when nothing changed', async () => {
++    const before = usePatternStore.getState().userPatterns[0]
++    await usePatternStore.getState().updatePatternControls('p1', { Speed: 10 })
++    expect(usePatternStore.getState().userPatterns[0]).toBe(before)
++  })
++})
++
+ describe('resetPatternSettings', () => {
+   it('clears the record settings bag', async () => {
+     usePatternStore.setState({
+diff --git a/src/store/patternStore.ts b/src/store/patternStore.ts
+index ab50240b..ab004912 100644
+--- a/src/store/patternStore.ts
++++ b/src/store/patternStore.ts
+@@ -46,6 +46,10 @@ interface PatternState {
+   // Clear a pattern's layer-1 overrides ("Reset to defaults"), dropping it
+   // back to recommended + global-sticky + dev-default on the next resolve.
+   resetPatternSettings: (id: string) => Promise<void>
++  // Sparse-merge persisted Control values (PatternRecord.controls) onto the
++  // record. Used for FastLED Patterns, keyed by FastLED UI name; like settings,
++  // no updatedAt bump.
++  updatePatternControls: (id: string, controls: Record<string, number | number[]>) => Promise<void>
+   // Sparse-merge per-demo settings overrides (cascade layer 1) — the demo equivalent
+   // of updatePatternSettings, persisted into the demoOverrides KV map.
+   updateDemoSettings: (name: string, patch: Partial<Settings>) => Promise<void>
+@@ -170,6 +174,21 @@ export const usePatternStore = create<PatternState>()((set, get) => ({
+     await getPersonalContentProvider().updatePattern(id, { settings: merged }).catch(() => {})
+   },
+ 
++  updatePatternControls: async (id, controls) => {
++    let merged: Record<string, number | number[]> | undefined
++    let changed = false
++    set((s) => ({
++      userPatterns: s.userPatterns.map((p) => {
++        if (p.id !== id) return p
++        merged = { ...p.controls, ...controls }
++        changed = Object.keys(controls).some((key) => JSON.stringify(p.controls?.[key]) !== JSON.stringify(controls[key]))
++        return changed ? { ...p, controls: merged } : p
++      }),
++    }))
++    if (merged === undefined || !changed) return
++    await getPersonalContentProvider().updatePattern(id, { controls: merged }).catch(() => {})
++  },
++
+   resetPatternSettings: async (id) => {
+     set((s) => ({
+       userPatterns: s.userPatterns.map((p) => (p.id === id ? { ...p, settings: {} } : p)),
+-- 
+2.55.0.windows.3
+

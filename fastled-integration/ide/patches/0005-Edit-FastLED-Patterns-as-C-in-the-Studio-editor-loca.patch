@@ -1,0 +1,769 @@
+From 5ce5dee3efca33140de830d22c575b6732bce9b0 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 01:05:07 +1000
+Subject: [PATCH 5/8] Edit FastLED Patterns as C++ in the Studio editor (local
+ #9002)
+
+Same Editor/Monaco surface, editorFlavor stays 'pattern'; the language is
+derived from the buffer's marker.
+
+- PixelblazeCodeEditor: `language` prop, FastLED buffers use Monaco's
+  built-in `cpp`; registers FastLED completion/hover (static catalogue in
+  engine/fastled/fastledApiCatalog.ts: FastLED.*, CRGB members and named
+  colours, lib8tion, colour utilities, palettes, timing macros, UISlider/
+  UICheckbox/UINumberField, PXLBLZ_NUM_LEDS).
+- Editor: FastLED buffers skip the Pixelblaze validator and request an
+  async compile; compiler diagnostics become Monaco markers (owner
+  'fastled') for the exact buffer only; the Pixelblaze debounce never
+  publishes FastLED source. Unmarked `#include <FastLED.h>` C++ gets an
+  explicit "Convert to FastLED Pattern" action (prepends the marker).
+- CompileStatusBadge pulses (working tone) while the buffer compiles.
+- openPatternRecord: FastLED source is published provisionally (the
+  preview compiles it; a failure makes it unavailable and broken).
+- Navigation preflight judges FastLED drafts by compileStatus, not by the
+  Pixelblaze parser.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest Editor.fastled + Editor.recovery + fastledProviders + openPattern +
+navigationPreflightStore (43 passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/components/CompileStatusBadge.tsx         |   6 +-
+ src/components/Editor.fastled.test.tsx        |  92 ++++++++
+ src/components/Editor.tsx                     |  84 +++++++-
+ src/components/PixelblazeCodeEditor.tsx       |   7 +-
+ .../monaco/fastledProviders.test.ts           |  31 +++
+ src/components/monaco/fastledProviders.ts     | 100 +++++++++
+ src/engine/fastled/fastledApiCatalog.ts       | 204 ++++++++++++++++++
+ src/store/navigationPreflightStore.ts         |   5 +-
+ src/store/openPattern.test.ts                 |  18 ++
+ src/store/openPattern.ts                      |  11 +
+ 10 files changed, 548 insertions(+), 10 deletions(-)
+ create mode 100644 src/components/Editor.fastled.test.tsx
+ create mode 100644 src/components/monaco/fastledProviders.test.ts
+ create mode 100644 src/components/monaco/fastledProviders.ts
+ create mode 100644 src/engine/fastled/fastledApiCatalog.ts
+
+diff --git a/src/components/CompileStatusBadge.tsx b/src/components/CompileStatusBadge.tsx
+index 8e9a5184..52f5645a 100644
+--- a/src/components/CompileStatusBadge.tsx
++++ b/src/components/CompileStatusBadge.tsx
+@@ -1,12 +1,16 @@
+ import { useEditorStore } from '@/store/editorStore'
++import { useFastLedStore } from '@/store/fastledStore'
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { StatusDot } from './StatusDot'
+ 
+ export function CompileStatusBadge() {
+   const status = useEditorStore((s) => s.compileStatus)
++  // A FastLED Pattern compiles asynchronously; pulse while this buffer compiles.
++  const compiling = useFastLedStore((s) => s.compilingSource !== null && s.compilingSource === useEditorStore.getState().source && isFastLedSource(s.compilingSource))
+ 
+   return (
+     <StatusDot
+-      tone={status === 'good' ? 'ok' : 'error'}
++      tone={compiling ? 'working' : status === 'good' ? 'ok' : 'error'}
+       testId="compile-status"
+       data-status={status}
+     />
+diff --git a/src/components/Editor.fastled.test.tsx b/src/components/Editor.fastled.test.tsx
+new file mode 100644
+index 00000000..0a5b188b
+--- /dev/null
++++ b/src/components/Editor.fastled.test.tsx
+@@ -0,0 +1,92 @@
++import { act, fireEvent, render, screen } from '@testing-library/react'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import { Editor } from './Editor'
++import { editorInitialState, useEditorStore } from '@/store/editorStore'
++import { patternInitialState, usePatternStore } from '@/store/patternStore'
++import { __resetFastLedStoreForTests, useFastLedStore } from '@/store/fastledStore'
++import { FASTLED_MARKER } from '@/engine/patternLanguage'
++
++const markers = vi.hoisted(() => ({ calls: [] as Array<{ owner: string; markers: Array<{ message: string; startLineNumber: number; startColumn: number; severity: number }> }> }))
++const languages = vi.hoisted(() => ({ last: '' }))
++
++vi.mock('@/components/PixelblazeCodeEditor', () => ({
++  PixelblazeCodeEditor: ({ value, language, onChange, onMount }: {
++    value: string
++    language?: string
++    onChange?: (value: string) => void
++    onMount?: (editor: unknown, monaco: unknown) => void
++  }) => {
++    languages.last = language ?? 'pixelblaze'
++    onMount?.(
++      { getModel: () => ({ getLineMaxColumn: () => 40, getLineCount: () => 10 }) },
++      {
++        editor: { setModelMarkers: (_model: unknown, owner: string, list: typeof markers.calls[number]['markers']) => markers.calls.push({ owner, markers: list }) },
++        MarkerSeverity: { Error: 8, Warning: 4, Info: 2 },
++      },
++    )
++    return <textarea aria-label="Pattern source" value={value} onChange={(event) => onChange?.(event.target.value)} />
++  },
++}))
++
++const FASTLED = `${FASTLED_MARKER}\n#include <FastLED.h>\nvoid setup() {}\nvoid loop() {}\n`
++const CPP = '#include <FastLED.h>\nCRGB leds[8];\nvoid loop() {}\n'
++
++beforeEach(() => {
++  __resetFastLedStoreForTests()
++  markers.calls = []
++  usePatternStore.setState({ ...patternInitialState, activePatternId: 'p1' })
++  useEditorStore.setState({ ...editorInitialState, editorFlavor: 'pattern', isReadOnly: false })
++})
++
++afterEach(() => {
++  vi.restoreAllMocks()
++})
++
++describe('Editor with FastLED Patterns', () => {
++  it('edits FastLED source as C++, skips the Pixelblaze validator and requests a compile', () => {
++    const requestCompile = vi.spyOn(useFastLedStore.getState(), 'requestCompile')
++    useEditorStore.setState({ source: FASTLED, previewSource: 'older', compileStatus: 'good' })
++    render(<Editor />)
++    expect(languages.last).toBe('fastled')
++    expect(useEditorStore.getState().compileStatus).toBe('good')
++    expect(requestCompile).toHaveBeenCalledWith(FASTLED)
++    expect(markers.calls.some((c) => c.owner === 'pixelblaze' && c.markers.length === 0)).toBe(true)
++  })
++
++  it('writes compiler diagnostics for the exact buffer as fastled markers', () => {
++    useEditorStore.setState({ source: FASTLED, previewSource: FASTLED })
++    render(<Editor />)
++    act(() => {
++      useFastLedStore.setState({
++        diagnosticsSource: FASTLED,
++        diagnostics: [{ line: 4, column: 13, severity: 'error', message: "use of undeclared identifier 'x'" }],
++      })
++    })
++    const last = markers.calls.filter((c) => c.owner === 'fastled').pop()
++    expect(last?.markers).toEqual([expect.objectContaining({ message: "use of undeclared identifier 'x'", startLineNumber: 4, startColumn: 13, severity: 8 })])
++  })
++
++  it('offers an explicit conversion for unmarked FastLED C++', () => {
++    useEditorStore.setState({ source: CPP })
++    render(<Editor />)
++    expect(languages.last).toBe('pixelblaze')
++    fireEvent.click(screen.getByRole('button', { name: 'Convert to FastLED Pattern' }))
++    expect(useEditorStore.getState().source).toBe(`${FASTLED_MARKER}\n${CPP}`)
++    expect(screen.queryByTestId('fastled-convert-offer')).not.toBeInTheDocument()
++    expect(languages.last).toBe('fastled')
++  })
++
++  it('never publishes a FastLED buffer from the Pixelblaze debounce', () => {
++    vi.useFakeTimers()
++    try {
++      useEditorStore.setState({ source: FASTLED, previewSource: FASTLED, compileStatus: 'good' })
++      render(<Editor />)
++      const edited = `${FASTLED}// tweak\n`
++      fireEvent.change(screen.getByLabelText('Pattern source'), { target: { value: edited } })
++      act(() => { vi.advanceTimersByTime(1000) })
++      expect(useEditorStore.getState().previewSource).toBe(FASTLED)
++    } finally {
++      vi.useRealTimers()
++    }
++  })
++})
+diff --git a/src/components/Editor.tsx b/src/components/Editor.tsx
+index 8d5094d6..5d87f472 100644
+--- a/src/components/Editor.tsx
++++ b/src/components/Editor.tsx
+@@ -8,6 +8,8 @@ import { validateSource } from '@/engine/validate'
+ import { parseMapSource } from '@/engine/maps'
+ import { parseMixinHeader } from '@/engine/mixins'
+ import { PixelblazeCodeEditor } from '@/components/PixelblazeCodeEditor'
++import { useFastLedStore } from '@/store/fastledStore'
++import { isFastLedSource, looksLikeFastLedSource, patternLanguage, withFastLedMarker } from '@/engine/patternLanguage'
+ 
+ const SYNC_TICK_MS = 4000
+ const PREVIEW_DEBOUNCE_MS = 600
+@@ -28,6 +30,11 @@ export function Editor() {
+   const setPreviewSource = useEditorStore((s) => s.setPreviewSource)
+   const compileStatus = useEditorStore((s) => s.compileStatus)
+   const activePatternId = usePatternStore((s) => s.activePatternId)
++  // A Pattern buffer is Pixelblaze or FastLED (C++) source, derived from its
++  // marker line; the other flavors are always Pixelblaze-dialect or plain JS.
++  const language = editorFlavor === 'pattern' ? patternLanguage(source) : 'pixelblaze'
++  const fastLedDiagnostics = useFastLedStore((s) => s.diagnostics)
++  const fastLedDiagnosticsSource = useFastLedStore((s) => s.diagnosticsSource)
+ 
+   const editorRef = useRef<monacoType.editor.IStandaloneCodeEditor | null>(null)
+   const monacoRef = useRef<typeof monacoType | null>(null)
+@@ -76,6 +83,9 @@ export function Editor() {
+         && current.source === value
+         && current.compileStatus === 'good'
+         && current.activePatternId !== null
++        // FastLED buffers publish only through fastledStore after a successful
++        // compile of this exact source.
++        && patternLanguage(value) === 'pixelblaze'
+       ) {
+         setPreviewSource(value)
+       }
+@@ -104,6 +114,17 @@ export function Editor() {
+       return
+     }
+ 
++    // FastLED Pattern: compiled asynchronously by the local compile service;
++    // fastledStore sets compileStatus and the 'fastled' markers when this
++    // exact source finishes. The open path already asks the preview to compile
++    // the saved source, so only an edited buffer needs a request here.
++    if (editorFlavor === 'pattern' && isFastLedSource(source)) {
++      monaco.editor.setModelMarkers(model, 'pixelblaze', [])
++      if (source !== useEditorStore.getState().previewSource) useFastLedStore.getState().requestCompile(source)
++      return
++    }
++    monaco.editor.setModelMarkers(model, 'fastled', [])
++
+     // Map mode (#151) authors plain JS, so the badge is a parse-only
+     // check. Mixin mode validates the structured pass header only: binding
+     // placeholders are resolved where the mixin is used, not inside the source.
+@@ -134,13 +155,62 @@ export function Editor() {
+     )
+   }, [source, isReadOnly, editorFlavor, setCompileStatus])
+ 
++  // FastLED compiler diagnostics → Monaco markers, only for the exact buffer
++  // they were produced for (service columns are already 1-based).
++  useEffect(() => {
++    const editor = editorRef.current
++    const monaco = monacoRef.current
++    const model = editor?.getModel()
++    if (!monaco || !model) return
++    if (language !== 'fastled' || fastLedDiagnosticsSource !== source) {
++      if (language !== 'fastled') monaco.editor.setModelMarkers(model, 'fastled', [])
++      return
++    }
++    const lineCount = model.getLineCount()
++    monaco.editor.setModelMarkers(model, 'fastled', fastLedDiagnostics.map((d) => {
++      const line = Math.min(Math.max(1, d.line), lineCount)
++      const startColumn = Math.min(d.column, model.getLineMaxColumn(line))
++      return {
++        severity: d.severity === 'error'
++          ? monaco.MarkerSeverity.Error
++          : d.severity === 'warning' ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info,
++        message: d.message,
++        startLineNumber: line,
++        startColumn,
++        endLineNumber: line,
++        endColumn: Math.max(startColumn + 1, model.getLineMaxColumn(line)),
++      }
++    }))
++  }, [language, source, fastLedDiagnostics, fastLedDiagnosticsSource])
++
++  // Pasted or imported FastLED C++ without the marker: offer the explicit
++  // conversion (never applied silently).
++  const offerConversion = editorFlavor === 'pattern' && !isReadOnly && activePatternId !== null && looksLikeFastLedSource(source)
++
+   return (
+-    <PixelblazeCodeEditor
+-      value={source}
+-      flavor={editorFlavor}
+-      readOnly={isReadOnly}
+-      onMount={handleMount}
+-      onChange={handleChange}
+-    />
++    <div className="flex h-full min-h-0 flex-col" data-pattern-language={language}>
++      {offerConversion && (
++        <div role="status" data-testid="fastled-convert-offer" className="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3 py-1.5 font-mono text-xs text-zinc-300">
++          <span className="min-w-0 flex-1">This looks like FastLED C++ (<code>#include &lt;FastLED.h&gt;</code>).</span>
++          <button
++            type="button"
++            className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-zinc-100 hover:border-live hover:text-live"
++            onClick={() => setEditedSource(withFastLedMarker(source))}
++          >
++            Convert to FastLED Pattern
++          </button>
++        </div>
++      )}
++      <div className="min-h-0 flex-1">
++        <PixelblazeCodeEditor
++          value={source}
++          flavor={editorFlavor}
++          language={language}
++          readOnly={isReadOnly}
++          onMount={handleMount}
++          onChange={handleChange}
++        />
++      </div>
++    </div>
+   )
+ }
+diff --git a/src/components/PixelblazeCodeEditor.tsx b/src/components/PixelblazeCodeEditor.tsx
+index b8bd46f0..aeeab602 100644
+--- a/src/components/PixelblazeCodeEditor.tsx
++++ b/src/components/PixelblazeCodeEditor.tsx
+@@ -2,11 +2,14 @@ import MonacoEditor, { BeforeMount, OnChange, OnMount } from '@monaco-editor/rea
+ import type * as monacoType from 'monaco-editor'
+ import { useEffect, useRef } from 'react'
+ import { registerPixelblazeLanguage, PIXELBLAZE_LANG_ID } from './monaco/pixelblazeLanguage'
++import { registerFastLedProviders, FASTLED_MONACO_LANGUAGE } from './monaco/fastledProviders'
+ 
+ type PixelblazeCodeEditorProps = {
+   value: string
+   readOnly?: boolean
+   flavor?: 'pattern' | 'map' | 'mixin' | 'library'
++  // Pattern language of a Pattern buffer; FastLED Patterns edit as C++.
++  language?: 'pixelblaze' | 'fastled'
+   onChange?: (value: string) => void
+   onMount?: (editor: monacoType.editor.IStandaloneCodeEditor, monaco: typeof monacoType) => void
+ }
+@@ -48,6 +51,7 @@ export function PixelblazeCodeEditor({
+   value,
+   readOnly = false,
+   flavor = 'pattern',
++  language = 'pixelblaze',
+   onChange,
+   onMount,
+ }: PixelblazeCodeEditorProps) {
+@@ -55,6 +59,7 @@ export function PixelblazeCodeEditor({
+ 
+   const handleBeforeMount: BeforeMount = (monaco) => {
+     registerPixelblazeLanguage(monaco)
++    registerFastLedProviders(monaco)
+     // Map mode uses Monaco's built-in `javascript` language for syntax coloring,
+     // but a map source is a bare `function(pixelCount){…}` expression — not a
+     // valid top-level statement/module — so Monaco's TS worker flags it with a
+@@ -96,7 +101,7 @@ export function PixelblazeCodeEditor({
+   return (
+     <MonacoEditor
+       height="100%"
+-      language={flavor === 'map' ? 'javascript' : PIXELBLAZE_LANG_ID}
++      language={flavor === 'map' ? 'javascript' : language === 'fastled' ? FASTLED_MONACO_LANGUAGE : PIXELBLAZE_LANG_ID}
+       theme="pixelblaze-dark"
+       value={value}
+       beforeMount={handleBeforeMount}
+diff --git a/src/components/monaco/fastledProviders.test.ts b/src/components/monaco/fastledProviders.test.ts
+new file mode 100644
+index 00000000..a1ed737c
+--- /dev/null
++++ b/src/components/monaco/fastledProviders.test.ts
+@@ -0,0 +1,31 @@
++import { describe, expect, it } from 'vitest'
++import { fastLedCompletionContext, resolveFastLedHover } from './fastledProviders'
++import { FASTLED_API, FASTLED_GLOBAL_API } from '@/engine/fastled/fastledApiCatalog'
++
++describe('FastLED completion and hover', () => {
++  it('picks the member list from the text before the cursor', () => {
++    expect(fastLedCompletionContext('  FastLED.')).toBe('FastLED')
++    expect(fastLedCompletionContext('  FastLED.setB')).toBe('FastLED')
++    expect(fastLedCompletionContext('  leds[i] = CRGB::')).toBe('CRGB-colour')
++    expect(fastLedCompletionContext('  leds[i].')).toBe('member')
++    expect(fastLedCompletionContext('  speed.val')).toBe('member')
++    expect(fastLedCompletionContext('  fill_')).toBeNull()
++  })
++
++  it('resolves hovers in their context', () => {
++    expect(resolveFastLedHover('  FastLED.', 'show')?.signature).toBe('void FastLED.show()')
++    expect(resolveFastLedHover('  leds[0] = CRGB::', 'Red')?.signature).toBe('CRGB::Red')
++    expect(resolveFastLedHover('  x = ', 'beatsin8')?.kind).toBe('function')
++    expect(resolveFastLedHover('  speed.', 'value')?.owner).toBe('UI')
++    expect(resolveFastLedHover('', 'notAnApi')).toBeUndefined()
++  })
++
++  it('keeps a catalogue of unique, documented entries', () => {
++    expect(FASTLED_API.length).toBeGreaterThan(150)
++    const keys = FASTLED_API.map((e) => `${e.owner ?? ''}:${e.name}`)
++    expect(new Set(keys).size).toBe(keys.length)
++    expect(FASTLED_API.every((e) => e.doc.length > 0 && e.signature.length > 0)).toBe(true)
++    expect(FASTLED_GLOBAL_API.some((e) => e.name === 'UISlider')).toBe(true)
++    expect(FASTLED_GLOBAL_API.some((e) => e.owner)).toBe(false)
++  })
++})
+diff --git a/src/components/monaco/fastledProviders.ts b/src/components/monaco/fastledProviders.ts
+new file mode 100644
+index 00000000..b0c23bc0
+--- /dev/null
++++ b/src/components/monaco/fastledProviders.ts
+@@ -0,0 +1,100 @@
++import type * as monacoType from 'monaco-editor'
++import {
++  FASTLED_GLOBAL_API,
++  fastLedMembers,
++  findFastLedApi,
++  type FastLedApiEntry,
++} from '@/engine/fastled/fastledApiCatalog'
++
++// FastLED Patterns edit in Monaco's built-in `cpp` language; these providers add
++// completion and hover from the static FastLED catalogue. Registered once.
++export const FASTLED_MONACO_LANGUAGE = 'cpp'
++
++let registered = false
++
++type MemberContext = 'FastLED' | 'CRGB-colour' | 'member' | null
++
++/** Which completion list applies at the end of `textBefore` (line text up to the cursor). */
++export function fastLedCompletionContext(textBefore: string): MemberContext {
++  if (/\bFastLED\s*\.\s*\w*$/.test(textBefore)) return 'FastLED'
++  if (/\bCRGB\s*::\s*\w*$/.test(textBefore)) return 'CRGB-colour'
++  if (/(\]|\b[A-Za-z_]\w*)\s*\.\s*\w*$/.test(textBefore)) return 'member'
++  return null
++}
++
++/** The catalogue entry a hover over `word` resolves to, given the text before it. */
++export function resolveFastLedHover(textBefore: string, word: string): FastLedApiEntry | undefined {
++  if (/\bFastLED\s*\.\s*$/.test(textBefore)) return findFastLedApi(word, 'FastLED')
++  if (/\bCRGB\s*::\s*$/.test(textBefore)) return findFastLedApi(word, 'CRGB')
++  if (/\.\s*$/.test(textBefore)) return findFastLedApi(word, 'CRGB') ?? findFastLedApi(word, 'UI')
++  return findFastLedApi(word)
++}
++
++function completionKind(monaco: typeof monacoType, entry: FastLedApiEntry): monacoType.languages.CompletionItemKind {
++  const k = monaco.languages.CompletionItemKind
++  switch (entry.kind) {
++    case 'function': return k.Function
++    case 'method': return entry.signature.includes('(') ? k.Method : k.Field
++    case 'macro': return k.Snippet
++    case 'type': return k.Class
++    case 'keyword': return k.Keyword
++    default: return k.Constant
++  }
++}
++
++export function registerFastLedProviders(monaco: typeof monacoType): void {
++  if (registered) return
++  registered = true
++
++  monaco.languages.registerCompletionItemProvider(FASTLED_MONACO_LANGUAGE, {
++    triggerCharacters: ['.', ':'],
++    provideCompletionItems(model, position) {
++      const word = model.getWordUntilPosition(position)
++      const range: monacoType.IRange = {
++        startLineNumber: position.lineNumber,
++        endLineNumber: position.lineNumber,
++        startColumn: word.startColumn,
++        endColumn: word.endColumn,
++      }
++      const textBefore = model.getLineContent(position.lineNumber).slice(0, position.column - 1)
++      const context = fastLedCompletionContext(textBefore)
++      const entries = context === 'FastLED'
++        ? fastLedMembers('FastLED')
++        : context === 'CRGB-colour'
++          ? fastLedMembers('CRGB').filter((e) => e.kind === 'constant')
++          : context === 'member'
++            ? [...fastLedMembers('CRGB').filter((e) => e.kind === 'method'), ...fastLedMembers('UI')]
++            : FASTLED_GLOBAL_API
++      return {
++        suggestions: entries.map((entry) => ({
++          label: entry.name,
++          kind: completionKind(monaco, entry),
++          detail: entry.signature,
++          documentation: { value: entry.doc },
++          insertText: entry.insert ?? entry.name,
++          insertTextRules: entry.insert && entry.insert.includes('$')
++            ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
++            : undefined,
++          range,
++        })),
++      }
++    },
++  })
++
++  monaco.languages.registerHoverProvider(FASTLED_MONACO_LANGUAGE, {
++    provideHover(model, position) {
++      const word = model.getWordAtPosition(position)
++      if (!word) return null
++      const textBefore = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1)
++      const entry = resolveFastLedHover(textBefore, word.word)
++      if (!entry) return null
++      return {
++        range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
++        contents: [
++          { value: `\`\`\`cpp\n${entry.signature}\n\`\`\`` },
++          { value: entry.doc },
++        ],
++      }
++    },
++  })
++}
+diff --git a/src/engine/fastled/fastledApiCatalog.ts b/src/engine/fastled/fastledApiCatalog.ts
+new file mode 100644
+index 00000000..c72a22d6
+--- /dev/null
++++ b/src/engine/fastled/fastledApiCatalog.ts
+@@ -0,0 +1,204 @@
++// Static FastLED API catalogue for completion and hover in FastLED Patterns.
++// Curated by hand from FastLED 3.10 (the version the compile service pins);
++// not exhaustive, it covers what Patterns use day to day. `owner` scopes a
++// member: 'FastLED' for `FastLED.x`, 'CRGB' for `leds[i].x` / colour values,
++// 'UI' for `mySlider.x`.
++
++export type FastLedApiKind = 'function' | 'macro' | 'type' | 'constant' | 'method' | 'keyword'
++
++export interface FastLedApiEntry {
++  name: string
++  kind: FastLedApiKind
++  signature: string
++  doc: string
++  owner?: 'FastLED' | 'CRGB' | 'UI'
++  /** Snippet body for completion (Monaco snippet syntax); defaults to name. */
++  insert?: string
++}
++
++const fn = (name: string, params: string, doc: string, ret = 'void'): FastLedApiEntry => ({
++  name,
++  kind: 'function',
++  signature: `${ret} ${name}(${params})`,
++  doc,
++  insert: params ? `${name}(${params.split(',').map((p, i) => `\${${i + 1}:${p.trim().split(/\s+/).pop()!.replace(/[[\]=].*$/, '')}}`).join(', ')})` : `${name}()`,
++})
++const constant = (name: string, doc: string, type = 'const'): FastLedApiEntry => ({ name, kind: 'constant', signature: `${type} ${name}`, doc })
++const member = (owner: 'FastLED' | 'CRGB' | 'UI', name: string, params: string, doc: string, ret = 'void'): FastLedApiEntry => ({
++  ...fn(name, params, doc, ret),
++  kind: 'method',
++  owner,
++  signature: `${ret} ${owner === 'FastLED' ? 'FastLED.' : ''}${name}(${params})`,
++})
++
++export const FASTLED_API: FastLedApiEntry[] = [
++  // ── Sketch structure ──────────────────────────────────────────────────────
++  { name: 'setup', kind: 'function', signature: 'void setup()', doc: 'Runs once when the Pattern starts (PXLBLZ: on every preview restart). Register strips with `FastLED.addLeds` here.', insert: 'void setup() {\n\t$0\n}' },
++  { name: 'loop', kind: 'function', signature: 'void loop()', doc: 'Runs repeatedly. Call `FastLED.show()` to publish a frame. In PXLBLZ a loop without delay runs once per preview frame.', insert: 'void loop() {\n\t$0\n\tFastLED.show();\n}' },
++  { name: 'PXLBLZ_NUM_LEDS', kind: 'macro', signature: '#define PXLBLZ_NUM_LEDS <map pixel count>', doc: 'Passed by PXLBLZ-IDE: the pixel count of the current map. Use it for `NUM_LEDS` so the Pattern follows the map.' },
++  { name: 'PXLBLZ_WIDTH', kind: 'macro', signature: '#define PXLBLZ_WIDTH <columns>', doc: 'Passed by PXLBLZ-IDE for a regular 2D grid map: number of columns.' },
++  { name: 'PXLBLZ_HEIGHT', kind: 'macro', signature: '#define PXLBLZ_HEIGHT <rows>', doc: 'Passed by PXLBLZ-IDE for a regular 2D grid map: number of rows.' },
++
++  // ── Types ─────────────────────────────────────────────────────────────────
++  { name: 'CRGB', kind: 'type', signature: 'struct CRGB { uint8_t r, g, b; }', doc: 'An RGB colour, one per LED (`CRGB leds[NUM_LEDS];`). Construct with `CRGB(r, g, b)`, `CRGB::Red`, or assign a `CHSV`.' },
++  { name: 'CHSV', kind: 'type', signature: 'struct CHSV { uint8_t h, s, v; }', doc: 'A colour in FastLED\'s 0-255 hue/saturation/value space ("rainbow" hues). Converts to CRGB on assignment.' },
++  { name: 'CRGBPalette16', kind: 'type', signature: 'class CRGBPalette16', doc: '16-entry colour palette, sampled with `ColorFromPalette`.' },
++  { name: 'CRGBPalette256', kind: 'type', signature: 'class CRGBPalette256', doc: '256-entry colour palette.' },
++  { name: 'CHSVPalette16', kind: 'type', signature: 'class CHSVPalette16', doc: '16-entry HSV palette.' },
++  { name: 'TBlendType', kind: 'type', signature: 'enum TBlendType { NOBLEND, LINEARBLEND, LINEARBLEND_NOWRAP }', doc: 'Palette interpolation mode for `ColorFromPalette`.' },
++  { name: 'CRGBSet', kind: 'type', signature: 'CRGBSet (CPixelView<CRGB>)', doc: 'A view over a range of LEDs: `CRGBSet part(leds + 10, 20);`.' },
++  { name: 'CRGBArray', kind: 'type', signature: 'template<int N> class CRGBArray', doc: 'Array of N LEDs with range operations: `CRGBArray<NUM_LEDS> leds; leds(0, 9).fill_solid(CRGB::Red);`' },
++  { name: 'fract8', kind: 'type', signature: 'typedef uint8_t fract8', doc: 'Fraction in 256ths (0 = 0.0, 255 ≈ 1.0).' },
++  { name: 'accum88', kind: 'type', signature: 'typedef uint16_t accum88', doc: '8.8 fixed-point number (BPM values for beat functions).' },
++
++  // ── Controls (FastLED UI → PXLBLZ Controls panel) ──────────────────────────
++  { name: 'UISlider', kind: 'type', signature: 'UISlider(const char *name, float value = 128, float min = 1, float max = 255, float step = -1)', doc: 'A slider Control in the preview\'s Controls panel. Read it with `.value()` (or `.as<int>()`). The value is remembered per Pattern.', insert: 'UISlider ${1:speed}("${2:Speed}", ${3:30}, ${4:1}, ${5:120}, ${6:1});' },
++  { name: 'UICheckbox', kind: 'type', signature: 'UICheckbox(const char *name, bool value = false)', doc: 'A toggle Control. Use it as a bool (`if (glitter) …`) or `.value()`.', insert: 'UICheckbox ${1:enabled}("${2:Enabled}", ${3:true});' },
++  { name: 'UINumberField', kind: 'type', signature: 'UINumberField(const char *name, double value, double min = 0, double max = 100)', doc: 'A number Control (shown as a ranged slider in PXLBLZ).', insert: 'UINumberField ${1:amount}("${2:Amount}", ${3:0}, ${4:0}, ${5:100});' },
++  { name: 'UIButton', kind: 'type', signature: 'UIButton(const char *name)', doc: 'Momentary button. Not shown as a Control in PXLBLZ yet.' },
++  { name: 'UIDropdown', kind: 'type', signature: 'UIDropdown(const char *name, fl::Slice<fl::string> options)', doc: 'Dropdown selection. Not shown as a Control in PXLBLZ yet.' },
++  { name: 'UITitle', kind: 'type', signature: 'UITitle(const char *text)', doc: 'Title text for the FastLED web UI (not shown in PXLBLZ).' },
++  { name: 'UIDescription', kind: 'type', signature: 'UIDescription(const char *text)', doc: 'Description text for the FastLED web UI (not shown in PXLBLZ).' },
++  member('UI', 'value', '', 'Current value of a UISlider / UICheckbox / UINumberField.', 'float'),
++  member('UI', 'setValue', 'float value', 'Set the element from the sketch.'),
++  { ...member('UI', 'as', '', 'Value converted to T, e.g. `speed.as<int>()`.', 'T'), insert: 'as<${1:int}>()' },
++
++  // ── FastLED controller object ─────────────────────────────────────────────
++  { name: 'FastLED', kind: 'constant', signature: 'CFastLED FastLED', doc: 'The global FastLED controller: `FastLED.addLeds`, `FastLED.show()`, `FastLED.setBrightness()`, …' },
++  { ...member('FastLED', 'addLeds', 'CRGB *leds, int numLeds', 'Register a strip. Chipset, data pin and colour order are template arguments: `FastLED.addLeds<WS2812B, 2, GRB>(leds, NUM_LEDS);`. In PXLBLZ strips are concatenated in registration order onto the map\'s pixels.', 'CLEDController &'), insert: 'addLeds<${1:WS2812B}, ${2:2}, ${3:GRB}>(${4:leds}, ${5:NUM_LEDS})' },
++  member('FastLED', 'show', '', 'Publish the current `leds[]` (applies brightness, correction, dithering). The preview shows the last show() of each frame.'),
++  member('FastLED', 'clear', 'bool writeData = false', 'Set all LEDs to black (and show if writeData).'),
++  member('FastLED', 'clearData', '', 'Set all LEDs to black without showing.'),
++  member('FastLED', 'setBrightness', 'uint8_t scale', 'Global brightness 0-255, applied to the wire bytes (L2) PXLBLZ sends to the LED router.'),
++  member('FastLED', 'getBrightness', '', 'Current global brightness.', 'uint8_t'),
++  member('FastLED', 'setCorrection', 'const CRGB &correction', 'Colour correction for all strips, e.g. `TypicalLEDStrip`.'),
++  member('FastLED', 'setTemperature', 'const CRGB &temperature', 'Colour temperature for all strips, e.g. `Tungsten100W`.'),
++  member('FastLED', 'setDither', 'uint8_t ditherMode = BINARY_DITHER', 'Temporal dithering: `BINARY_DITHER` or `DISABLE_DITHER`.'),
++  member('FastLED', 'setMaxPowerInVoltsAndMilliamps', 'uint8_t volts, uint32_t milliamps', 'Power limit; scales brightness down when the frame would draw more.'),
++  member('FastLED', 'setMaxRefreshRate', 'uint16_t refresh, bool constrain = false', 'Cap the refresh rate.'),
++  member('FastLED', 'delay', 'unsigned long ms', 'Wait ms milliseconds while repeatedly calling show() (keeps dithering alive). Virtual time in PXLBLZ.'),
++  member('FastLED', 'getFPS', '', 'Estimated frames per second.', 'uint16_t'),
++  member('FastLED', 'count', '', 'Number of registered controllers.', 'int'),
++  member('FastLED', 'size', '', 'Number of LEDs of the first controller.', 'int'),
++  member('FastLED', 'leds', '', 'LED array of the first controller.', 'CRGB *'),
++
++  // ── CRGB members and colours ──────────────────────────────────────────────
++  member('CRGB', 'setRGB', 'uint8_t r, uint8_t g, uint8_t b', 'Set red, green, blue.', 'CRGB &'),
++  member('CRGB', 'setHSV', 'uint8_t hue, uint8_t sat, uint8_t val', 'Set from FastLED HSV.', 'CRGB &'),
++  member('CRGB', 'setHue', 'uint8_t hue', 'Fully saturated, full brightness hue.', 'CRGB &'),
++  member('CRGB', 'nscale8', 'uint8_t scale', 'Scale brightness down (scale/256).', 'CRGB &'),
++  member('CRGB', 'nscale8_video', 'uint8_t scale', 'Scale down, never to zero for non-zero channels.', 'CRGB &'),
++  member('CRGB', 'fadeToBlackBy', 'uint8_t fadeFactor', 'Dim by fadeFactor/256.', 'CRGB &'),
++  member('CRGB', 'fadeLightBy', 'uint8_t fadeFactor', 'Dim by fadeFactor/256 (video scaling).', 'CRGB &'),
++  member('CRGB', 'maximizeBrightness', 'uint8_t limit = 255', 'Scale up so the brightest channel reaches limit.', 'CRGB &'),
++  member('CRGB', 'getLuma', '', 'Perceived brightness 0-255.', 'uint8_t'),
++  member('CRGB', 'getAverageLight', '', 'Average of the three channels.', 'uint8_t'),
++  member('CRGB', 'lerp8', 'const CRGB &other, fract8 frac', 'Linear blend towards other.', 'CRGB'),
++  { name: 'r', kind: 'method', owner: 'CRGB', signature: 'uint8_t r', doc: 'Red channel 0-255.' },
++  { name: 'g', kind: 'method', owner: 'CRGB', signature: 'uint8_t g', doc: 'Green channel 0-255.' },
++  { name: 'b', kind: 'method', owner: 'CRGB', signature: 'uint8_t b', doc: 'Blue channel 0-255.' },
++  ...['Black', 'White', 'Red', 'Green', 'Blue', 'Yellow', 'Orange', 'Purple', 'Pink', 'Cyan', 'Magenta', 'Gold', 'Amethyst', 'Aqua', 'Coral', 'Crimson', 'DarkOrange', 'DeepPink', 'FairyLight', 'ForestGreen', 'Gray', 'HotPink', 'Indigo', 'Lime', 'Navy', 'OrangeRed', 'Plaid', 'Salmon', 'SkyBlue', 'Teal', 'Turquoise', 'Violet', 'WhiteSmoke'].map(
++    (c): FastLedApiEntry => ({ name: c, kind: 'constant', owner: 'CRGB', signature: `CRGB::${c}`, doc: `Named colour (HTML colour name), e.g. \`leds[i] = CRGB::${c};\`` }),
++  ),
++
++  // ── Colour utilities ──────────────────────────────────────────────────────
++  fn('fill_solid', 'CRGB *leds, int numLeds, const CRGB &color', 'Fill numLeds LEDs with one colour.'),
++  fn('fill_rainbow', 'CRGB *leds, int numLeds, uint8_t initialHue, uint8_t deltaHue = 5', 'Rainbow starting at initialHue, hue step deltaHue per LED.'),
++  fn('fill_rainbow_circular', 'CRGB *leds, int numLeds, uint8_t initialHue, bool reversed = false', 'Rainbow that wraps exactly once around the strip.'),
++  fn('fill_gradient_RGB', 'CRGB *leds, uint16_t numLeds, const CRGB &c1, const CRGB &c2', 'RGB gradient over numLeds LEDs (also 3- and 4-colour overloads).'),
++  fn('fill_gradient', 'CRGB *leds, uint16_t numLeds, const CHSV &c1, const CHSV &c2, TGradientDirectionCode dir = SHORTEST_HUES', 'HSV gradient.'),
++  fn('fill_palette', 'CRGB *leds, uint16_t N, uint8_t startIndex, uint8_t incIndex, const CRGBPalette16 &pal, uint8_t brightness, TBlendType blend', 'Fill from a palette.'),
++  fn('fadeToBlackBy', 'CRGB *leds, uint16_t numLeds, uint8_t fadeBy', 'Dim all LEDs by fadeBy/256 (trails).'),
++  fn('fadeLightBy', 'CRGB *leds, uint16_t numLeds, uint8_t fadeBy', 'Dim all LEDs by fadeBy/256 (video scaling).'),
++  fn('nscale8', 'CRGB *leds, uint16_t numLeds, uint8_t scale', 'Scale all LEDs by scale/256.'),
++  fn('blur1d', 'CRGB *leds, uint16_t numLeds, fract8 blurAmount', 'One-dimensional blur.'),
++  fn('blur2d', 'CRGB *leds, uint8_t width, uint8_t height, fract8 blurAmount, const XYMap &xymap', '2D blur over a matrix.'),
++  fn('blend', 'const CRGB &p1, const CRGB &p2, fract8 amountOfP2', 'Blend two colours.', 'CRGB'),
++  fn('nblend', 'CRGB &existing, const CRGB &overlay, fract8 amountOfOverlay', 'Blend overlay into existing in place.', 'CRGB &'),
++  fn('ColorFromPalette', 'const CRGBPalette16 &pal, uint8_t index, uint8_t brightness = 255, TBlendType blend = LINEARBLEND', 'Colour at index (0-255) of a palette.', 'CRGB'),
++  fn('HeatColor', 'uint8_t temperature', 'Black-body "fire" colour for 0-255 heat.', 'CRGB'),
++  fn('hsv2rgb_rainbow', 'const CHSV &hsv, CRGB &rgb', 'FastLED rainbow HSV → RGB conversion.'),
++  fn('hsv2rgb_spectrum', 'const CHSV &hsv, CRGB &rgb', 'Spectrum HSV → RGB conversion.'),
++  fn('rgb2hsv_approximate', 'const CRGB &rgb', 'Approximate RGB → HSV.', 'CHSV'),
++  fn('XY', 'uint8_t x, uint8_t y', 'Your matrix index function (define it yourself for 2D layouts).', 'uint16_t'),
++
++  // ── lib8tion math ─────────────────────────────────────────────────────────
++  fn('sin8', 'uint8_t theta', 'Fast sine: 0-255 angle → 0-255.', 'uint8_t'),
++  fn('cos8', 'uint8_t theta', 'Fast cosine: 0-255 angle → 0-255.', 'uint8_t'),
++  fn('sin16', 'uint16_t theta', 'Sine: 0-65535 angle → -32767..32767.', 'int16_t'),
++  fn('cos16', 'uint16_t theta', 'Cosine: 0-65535 angle → -32767..32767.', 'int16_t'),
++  fn('triwave8', 'uint8_t in', 'Triangle wave 0-255.', 'uint8_t'),
++  fn('quadwave8', 'uint8_t in', 'Quadratic wave 0-255.', 'uint8_t'),
++  fn('cubicwave8', 'uint8_t in', 'Cubic wave 0-255.', 'uint8_t'),
++  fn('beat8', 'accum88 bpm, uint32_t timebase = 0', 'Sawtooth 0-255 at bpm beats per minute (time-based).', 'uint8_t'),
++  fn('beat16', 'accum88 bpm, uint32_t timebase = 0', 'Sawtooth 0-65535 at bpm.', 'uint16_t'),
++  fn('beatsin8', 'accum88 bpm, uint8_t lowest = 0, uint8_t highest = 255, uint32_t timebase = 0, uint8_t phase = 0', 'Sine wave between lowest and highest at bpm.', 'uint8_t'),
++  fn('beatsin16', 'accum88 bpm, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase = 0', '16-bit sine wave at bpm.', 'uint16_t'),
++  fn('beatsin88', 'accum88 bpm88, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase = 0', 'Sine wave with 8.8 fixed-point bpm.', 'uint16_t'),
++  fn('scale8', 'uint8_t i, fract8 scale', 'i * scale / 256.', 'uint8_t'),
++  fn('scale8_video', 'uint8_t i, fract8 scale', 'Like scale8 but never scales a non-zero value to 0.', 'uint8_t'),
++  fn('scale16', 'uint16_t i, fract16 scale', 'i * scale / 65536.', 'uint16_t'),
++  fn('qadd8', 'uint8_t i, uint8_t j', 'Saturating add (max 255).', 'uint8_t'),
++  fn('qsub8', 'uint8_t i, uint8_t j', 'Saturating subtract (min 0).', 'uint8_t'),
++  fn('qmul8', 'uint8_t i, uint8_t j', 'Saturating multiply.', 'uint8_t'),
++  fn('add8', 'uint8_t i, uint8_t j', 'Wrapping add.', 'uint8_t'),
++  fn('sub8', 'uint8_t i, uint8_t j', 'Wrapping subtract.', 'uint8_t'),
++  fn('avg8', 'uint8_t i, uint8_t j', 'Average of two bytes.', 'uint8_t'),
++  fn('lerp8by8', 'uint8_t a, uint8_t b, fract8 frac', 'Linear interpolation between a and b.', 'uint8_t'),
++  fn('lerp16by16', 'uint16_t a, uint16_t b, fract16 frac', '16-bit linear interpolation.', 'uint16_t'),
++  fn('map8', 'uint8_t in, uint8_t rangeStart, uint8_t rangeEnd', 'Map 0-255 onto rangeStart..rangeEnd.', 'uint8_t'),
++  fn('ease8InOutQuad', 'uint8_t i', 'Quadratic ease-in/ease-out.', 'uint8_t'),
++  fn('ease8InOutCubic', 'uint8_t i', 'Cubic ease-in/ease-out.', 'uint8_t'),
++  fn('dim8_raw', 'uint8_t x', 'Gamma-ish dimming curve.', 'uint8_t'),
++  fn('dim8_video', 'uint8_t x', 'Dimming curve that keeps non-zero values non-zero.', 'uint8_t'),
++  fn('brighten8_raw', 'uint8_t x', 'Inverse of dim8_raw.', 'uint8_t'),
++  fn('sqrt16', 'uint16_t x', 'Integer square root.', 'uint8_t'),
++  fn('random8', 'uint8_t lim = 256', 'Pseudo-random 0..lim-1 (FastLED generator, own seed).', 'uint8_t'),
++  fn('random16', 'uint16_t lim = 65536', 'Pseudo-random 0..lim-1.', 'uint16_t'),
++  fn('random16_add_entropy', 'uint16_t entropy', 'Mix entropy into the FastLED generator.'),
++  fn('random16_set_seed', 'uint16_t seed', 'Seed the FastLED generator.'),
++  fn('inoise8', 'uint16_t x, uint16_t y = 0, uint16_t z = 0', 'Perlin noise 0-255.', 'uint8_t'),
++  fn('inoise16', 'uint32_t x, uint32_t y = 0, uint32_t z = 0', 'Perlin noise 0-65535.', 'uint16_t'),
++  fn('fill_noise8', 'CRGB *leds, int numLeds, uint8_t octaves, uint16_t x, int scale, uint8_t hueOctaves, uint16_t hueX, int hueScale, uint16_t time', 'Fill with noise-based colours.'),
++
++  // ── Timing ────────────────────────────────────────────────────────────────
++  { name: 'EVERY_N_MILLISECONDS', kind: 'macro', signature: 'EVERY_N_MILLISECONDS(N) { … }', doc: 'Run the block at most every N ms (virtual time in PXLBLZ).', insert: 'EVERY_N_MILLISECONDS(${1:20}) {\n\t$0\n}' },
++  { name: 'EVERY_N_SECONDS', kind: 'macro', signature: 'EVERY_N_SECONDS(N) { … }', doc: 'Run the block at most every N seconds.', insert: 'EVERY_N_SECONDS(${1:10}) {\n\t$0\n}' },
++  { name: 'EVERY_N_MILLISECONDS_I', kind: 'macro', signature: 'EVERY_N_MILLISECONDS_I(name, N) { … }', doc: 'Like EVERY_N_MILLISECONDS with a named timer whose period can change (`name.setPeriod(ms)`).', insert: 'EVERY_N_MILLISECONDS_I(${1:timer}, ${2:20}) {\n\t$0\n}' },
++  fn('millis', '', 'Milliseconds since setup() (virtual sketch clock in PXLBLZ).', 'unsigned long'),
++  fn('micros', '', 'Microseconds since setup() (virtual).', 'unsigned long'),
++  fn('delay', 'unsigned long ms', 'Wait ms milliseconds (advances the virtual clock; the preview continues with the next frame).'),
++  fn('delayMicroseconds', 'unsigned int us', 'Wait us microseconds (virtual).'),
++  fn('random', 'long max', 'Arduino random 0..max-1 (deterministic per run in PXLBLZ). Also random(min, max).', 'long'),
++  fn('randomSeed', 'unsigned long seed', 'Seed Arduino random().'),
++  fn('map', 'long x, long inMin, long inMax, long outMin, long outMax', 'Arduino linear remap.', 'long'),
++  fn('constrain', 'x, a, b', 'Clamp x to a..b.', 'T'),
++
++  // ── Palettes and constants ────────────────────────────────────────────────
++  ...['RainbowColors_p', 'RainbowStripeColors_p', 'PartyColors_p', 'HeatColors_p', 'CloudColors_p', 'LavaColors_p', 'OceanColors_p', 'ForestColors_p'].map(
++    (p) => constant(p, 'Built-in 16-entry palette (use with ColorFromPalette).', 'const TProgmemRGBPalette16'),
++  ),
++  ...['TypicalLEDStrip', 'TypicalSMD5050', 'TypicalPixelString', 'UncorrectedColor'].map((c) => constant(c, 'Colour correction preset for `setCorrection`.', 'const CRGB')),
++  ...['Candle', 'Tungsten40W', 'Tungsten100W', 'Halogen', 'CarbonArc', 'HighNoonSun', 'DirectSunlight', 'OvercastSky', 'ClearBlueSky', 'UncorrectedTemperature'].map((c) => constant(c, 'Colour temperature preset for `setTemperature`.', 'const CRGB')),
++  ...['BINARY_DITHER', 'DISABLE_DITHER'].map((c) => constant(c, 'Dither mode for `FastLED.setDither`.', 'const uint8_t')),
++  ...['LINEARBLEND', 'NOBLEND', 'LINEARBLEND_NOWRAP'].map((c) => constant(c, 'Palette blend mode.', 'TBlendType')),
++  ...['WS2812B', 'WS2812', 'WS2811', 'WS2813', 'WS2815', 'SK6812', 'NEOPIXEL', 'TM1809', 'UCS1903', 'GS1903', 'APA106', 'PL9823', 'WS2852', 'APA102', 'SK9822', 'DOTSTAR', 'LPD8806', 'WS2801'].map(
++    (c) => constant(c, 'LED chipset template argument for `FastLED.addLeds<CHIPSET, PIN, ORDER>`. PXLBLZ previews any chipset; the LED router decides the real output.', 'chipset'),
++  ),
++  ...['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'].map((c) => constant(c, 'Colour order of the strip. PXLBLZ always sends RGB to the LED router (the wire bytes are re-ordered back to RGB).', 'EOrder')),
++]
++
++/** Entries offered at top level (not members). */
++export const FASTLED_GLOBAL_API = FASTLED_API.filter((e) => !e.owner)
++
++export function fastLedMembers(owner: 'FastLED' | 'CRGB' | 'UI'): FastLedApiEntry[] {
++  return FASTLED_API.filter((e) => e.owner === owner)
++}
++
++export function findFastLedApi(word: string, owner?: 'FastLED' | 'CRGB' | 'UI'): FastLedApiEntry | undefined {
++  if (owner) {
++    const scoped = FASTLED_API.find((e) => e.owner === owner && e.name === word)
++    if (scoped) return scoped
++  }
++  return FASTLED_API.find((e) => !e.owner && e.name === word) ?? FASTLED_API.find((e) => e.name === word)
++}
+diff --git a/src/store/navigationPreflightStore.ts b/src/store/navigationPreflightStore.ts
+index 60fa82eb..d504c0ab 100644
+--- a/src/store/navigationPreflightStore.ts
++++ b/src/store/navigationPreflightStore.ts
+@@ -7,6 +7,7 @@ import { useMixinStore } from './mixinStore'
+ import { usePatternStore } from './patternStore'
+ import { persistPatternSourceForNavigation } from './autosaveSync'
+ import { validateSource } from '@/engine/validate'
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import {
+   __resetRouterNavigationPreflightForTests,
+   setRouterNavigationPreflight,
+@@ -167,7 +168,9 @@ function savePatternThenReplace(pending: Extract<PendingReplacement, { kind: 'sa
+     // same still-active record cannot masquerade as a working preview.
+     editor.setSource(pending.draft.source)
+     if (pending.draft.source === '') editor.setPreviewUnavailable('empty-source')
+-    else if (validateSource(pending.draft.source).length > 0) {
++    else if (isFastLedSource(pending.draft.source)
++      ? editor.compileStatus === 'broken'
++      : validateSource(pending.draft.source).length > 0) {
+       editor.setPreviewUnavailable('broken-source')
+     }
+     runReplacement(pending.replacement)
+diff --git a/src/store/openPattern.test.ts b/src/store/openPattern.test.ts
+index d1169e4b..20fbcf38 100644
+--- a/src/store/openPattern.test.ts
++++ b/src/store/openPattern.test.ts
+@@ -66,3 +66,21 @@ describe('openPatternRecord preview publication (#818)', () => {
+     })
+   })
+ })
++
++describe('openPatternRecord for FastLED Patterns', () => {
++  it('skips the Pixelblaze validator and publishes the saved C++ provisionally', () => {
++    const fastled = { ...PATTERN, src: '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid loop() {}\n' }
++    usePatternStore.setState({ userPatterns: [fastled] })
++
++    openPatternRecord(fastled)
++
++    expect(useEditorStore.getState()).toMatchObject({
++      source: fastled.src,
++      previewSource: fastled.src,
++      previewUnavailableReason: null,
++      compileStatus: 'good',
++      isReadOnly: false,
++      previewPatternName: 'Pattern A',
++    })
++  })
++})
+diff --git a/src/store/openPattern.ts b/src/store/openPattern.ts
+index e128b934..fbba4f7f 100644
+--- a/src/store/openPattern.ts
++++ b/src/store/openPattern.ts
+@@ -6,6 +6,7 @@ import { useDocsStore } from './docsStore'
+ import { useLibraryStore } from './libraryStore'
+ import { DEMOS } from '@/pixelblaze/stock/patterns'
+ import { validateSource } from '@/engine/validate'
++import { isFastLedSource } from '@/engine/patternLanguage'
+ 
+ // The full open-a-user-pattern sequence (active id + editor + preview), shared
+ // by the rail click path and the route application path (#308) so a deep link
+@@ -19,6 +20,16 @@ export function openPatternRecord(record: PatternRecord): void {
+   const editor = useEditorStore.getState()
+   editor.setEditorFlavor('pattern')
+   editor.setSource(record.src)
++  if (isFastLedSource(record.src)) {
++    // FastLED Patterns compile asynchronously (fastledStore): publish the saved
++    // source provisionally; the preview compiles it and a failure makes it
++    // explicitly unavailable and the status broken.
++    editor.setCompileStatus('good')
++    editor.setPreviewSource(record.src)
++    editor.setPreviewPatternName(record.name)
++    editor.setIsReadOnly(false)
++    return
++  }
+   const sourceErrors = validateSource(record.src)
+   editor.setCompileStatus(sourceErrors.length === 0 ? 'good' : 'broken')
+   if (record.src === '') editor.setPreviewUnavailable('empty-source')
+-- 
+2.55.0.windows.3
+

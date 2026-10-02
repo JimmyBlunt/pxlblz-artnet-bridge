@@ -1,0 +1,404 @@
+From 98401b0ca81c3095ab63be17f66e8e3136b74029 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 00:55:51 +1000
+Subject: [PATCH 4/8] Preview FastLED Patterns through the shared render loop
+ (local #9002)
+
+A FastLED previewSource takes its own branch in the Preview build effect:
+@pxlblz-dim drives the default layout, defines = {PXLBLZ_NUM_LEDS (map
+pixel count), PXLBLZ_WIDTH/HEIGHT for regular grids}; the compiled module
+comes from fastledStore (compiled on demand when missing, with a
+"Compiling FastLED Pattern..." overlay, or a friendly German notice when
+the compile service is offline: the launcher starts it, otherwise
+`npm run service` in fastled-integration). The host is instantiated
+asynchronously (cancel-guarded), seeded per Pattern, persisted Control
+values are applied before the first frame, and the FastLED handle runs
+through startLoop: same renderer, paintPacked and external pixel output,
+so the router receives FastLED's exact wire bytes. Always the fast shim.
+
+- LED-count mismatch and runaway-budget notices use the renderAdaptation
+  readout.
+- Control values of FastLED Patterns persist per Pattern (debounced
+  updatePatternControls, keyed by FastLED UI name, only real changes).
+- ControlsPanel/readout: ranged sliders show raw values with the FastLED
+  min/max/step; Pixelblaze sliders unchanged.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest Preview + ControlsPanel + previewPanel + renderLoop + src/engine/fastled (75 passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/components/ControlsPanel.test.tsx     |  16 +++
+ src/components/ControlsPanel.tsx          |  12 +-
+ src/components/Preview.tsx                | 159 +++++++++++++++++++++-
+ src/engine/fastled/fastledPreview.test.ts |  23 ++++
+ src/engine/fastled/fastledPreview.ts      |  34 +++++
+ src/engine/previewPanel.test.ts           |  10 ++
+ src/engine/previewPanel.ts                |   5 +-
+ 7 files changed, 251 insertions(+), 8 deletions(-)
+ create mode 100644 src/engine/fastled/fastledPreview.test.ts
+ create mode 100644 src/engine/fastled/fastledPreview.ts
+
+diff --git a/src/components/ControlsPanel.test.tsx b/src/components/ControlsPanel.test.tsx
+index 2a0d5701..e575781c 100644
+--- a/src/components/ControlsPanel.test.tsx
++++ b/src/components/ControlsPanel.test.tsx
+@@ -84,3 +84,19 @@ describe('ControlsPanel curated seconds sliders (#819)', () => {
+     expect(useControlStore.getState().controlValues.sliderLoopInterval).toBeCloseTo(0.237, 6)
+   })
+ })
++
++describe('ControlsPanel FastLED ranged sliders', () => {
++  it('uses the control range and raw values instead of 0..1 percentages', () => {
++    useEditorStore.getState().setControls([
++      { exportName: 'sliderSpeed', kind: 'slider', label: 'Speed', range: { min: 1, max: 120, step: 1 } },
++    ])
++    useControlStore.setState({ controlValues: { sliderSpeed: 42 } })
++    render(<ControlsPanel />)
++    const slider = screen.getByRole('slider', { name: /speed/i })
++    expect(slider).toHaveAttribute('min', '1')
++    expect(slider).toHaveAttribute('max', '120')
++    expect(slider).toHaveAttribute('step', '1')
++    expect(slider).toHaveValue('42')
++    expect(slider).toHaveAttribute('aria-valuetext', '42')
++  })
++})
+diff --git a/src/components/ControlsPanel.tsx b/src/components/ControlsPanel.tsx
+index a7b85139..b95b619a 100644
+--- a/src/components/ControlsPanel.tsx
++++ b/src/components/ControlsPanel.tsx
+@@ -79,7 +79,8 @@ export function ControlsPanel({ mode }: { mode?: string } = {}) {
+ 
+   const renderSlider = (c: (typeof controls)[number]) => {
+     const raw = controlValues[c.exportName]
+-    const value = typeof raw === 'number' ? raw : 0.5
++    // FastLED Pattern sliders carry their own range and raw values.
++    const value = typeof raw === 'number' ? raw : c.range ? c.range.min : 0.5
+     if (c.secondsPresentation) {
+       // Curated seconds sliders (raw value * scale = seconds) get an exact
+       // typed field: "2.37" means 2.37 s, stored back as the raw 0..1 value.
+@@ -102,10 +103,11 @@ export function ControlsPanel({ mode }: { mode?: string } = {}) {
+         key={c.exportName}
+         label={c.label.toLowerCase()}
+         value={value}
+-        min={0}
+-        max={1}
+-        step={0.01}
+-        presentation="percentage"
++        min={c.range?.min ?? 0}
++        max={c.range?.max ?? 1}
++        step={c.range?.step ?? 0.01}
++        presentation={c.range ? 'number' : 'percentage'}
++        format={c.range ? (v) => String(Number(v.toFixed(3))) : undefined}
+         onChange={(v) => setControlValue(c.exportName, v)}
+       />
+     )
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index 26bbe5e6..97a69cb2 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -35,6 +35,20 @@ import { snapshotWatchValue } from '@/engine/watchValue'
+ import { captureEnabled, createPreviewCapture } from '@/dev/previewCapture'
+ import { runCaptureSequence, type CaptureSequenceOptions } from '@/dev/captureSequence'
+ import { beginCaptureOrbit } from '@/dev/captureOrbit'
++import { useFastLedStore } from '@/store/fastledStore'
++import { isFastLedSource, parseFastLedDirectives } from '@/engine/patternLanguage'
++import { instantiateFastLedHost, type FastLedHost } from '@/engine/fastled/fastledWasmHost'
++import { createFastLedPatternHandle } from '@/engine/fastled/fastledPatternHandle'
++import {
++  fastLedControlBindings,
++  fastLedUiValue,
++  mergePersistedControlValues,
++  persistedControlPatch,
++  type FastLedControlBinding,
++} from '@/engine/fastled/fastledControls'
++import { fastLedDefinesForLayout, fastLedLedCountNotice, fastLedSeed } from '@/engine/fastled/fastledPreview'
++
++const FASTLED_CONTROL_PERSIST_MS = 500
+ 
+ // Square 3D viewport size (CSS px): fill the available pane edge-to-edge (the
+ // smaller of its two sides), so the 3D canvas is exactly as tall as a square 2D
+@@ -99,6 +113,13 @@ export function Preview({
+     lightSize: number
+   } | null>(null)
+   const [runtimeError, setRuntimeError] = useState<string | null>(null)
++  // FastLED Pattern preview state: waiting for its compile, or the compile
++  // service is offline. fastLedRetry re-runs the build effect once the
++  // artifact lands; fastLedControlsRef backs per-Pattern Control persistence.
++  const [fastLedNotice, setFastLedNotice] = useState<'compiling' | 'offline' | null>(null)
++  const [fastLedRetry, setFastLedRetry] = useState(0)
++  const fastLedControlsRef = useRef<{ patternId: string | null; controls: FastLedControlBinding[]; baseline: string } | null>(null)
++  const fastLedServiceUrl = useFastLedStore((s) => s.serviceUrl)
+   const viewportRef = useRef(viewport)
+   useEffect(() => { viewportRef.current = viewport }, [viewport])
+   const viewportReady = viewport !== null
+@@ -335,6 +356,103 @@ export function Preview({
+       }
+     }
+ 
++    // FastLED Pattern: compiled C++ (wasm) behind a PatternHandle; same layout,
++    // renderer, loop and external output as a Pixelblaze Pattern. Always the
++    // fast shim (Precise 16.16 is meaningless for C++ output).
++    if (isFastLedSource(previewSource)) {
++      const { dim, output } = parseFastLedDirectives(previewSource)
++      useEditorStore.getState().setNativeDim(dim)
++      const layout = resolveActiveLayout(dim)
++      const defines = fastLedDefinesForLayout(layout)
++      const fastled = useFastLedStore.getState()
++      fastled.setLastDefines(defines)
++      const artifact = fastled.getArtifact(previewSource, defines)
++      if (!artifact) {
++        const notice = fastled.serviceStatus === 'offline' ? 'offline' : 'compiling'
++        queueMicrotask(() => setFastLedNotice(notice))
++        fastled.requestCompile(previewSource, defines, { immediate: true })
++        // Nothing runs until it compiled: drop the previous Pattern's Controls.
++        handleRef.current = null
++        useEditorStore.getState().setPatternVars([])
++        useEditorStore.getState().setControls([])
++        // Re-run once this exact artifact lands; meanwhile track offline state.
++        const unsubscribe = useFastLedStore.subscribe((state, prev) => {
++          if (state.artifactVersion === prev.artifactVersion && state.serviceStatus === prev.serviceStatus) return
++          if (state.getArtifact(previewSource, defines)) setFastLedRetry((n) => n + 1)
++          else setFastLedNotice(state.serviceStatus === 'offline' ? 'offline' : 'compiling')
++        })
++        return () => {
++          unsubscribe()
++          queueMicrotask(() => setFastLedNotice(null))
++        }
++      }
++      queueMicrotask(() => setFastLedNotice(null))
++      if (!artifact.ok) {
++        const msg = artifact.message
++        queueMicrotask(() => setRuntimeError(msg))
++        return
++      }
++      const patternId = activePatternId
++      let cancelled = false
++      let stop: (() => void) | null = null
++      void (async () => {
++        let host: FastLedHost
++        try {
++          host = await instantiateFastLedHost(artifact.module, {
++            onConsole: (text, stream) => (stream === 'stderr' ? console.warn : console.info)(`[FastLED] ${text}`),
++          })
++          if (cancelled) return
++          // Fixed seed per Pattern, so reloads replay the same random() sequence.
++          host.init(fastLedSeed(patternId ?? previewSource))
++        } catch (err) {
++          if (!cancelled) setRuntimeError(err instanceof Error ? err.message : String(err))
++          return
++        }
++        const controls = fastLedControlBindings(host.getUi())
++        const record = patternId === null
++          ? undefined
++          : usePatternStore.getState().userPatterns.find((p) => p.id === patternId)
++        const values = mergePersistedControlValues(controls, record?.controls)
++        // Persisted Control values apply before the first frame.
++        for (const c of controls) host.setUi(c.id, fastLedUiValue(c, values[c.exportName]))
++        const clock = createVirtualClock()
++        const shim = createShim({
++          mapPoints: layout.mapPoints,
++          pixelCount: layout.pixelCount,
++          dimensions: layout.mapDim,
++          getVirtualTime: () => clock.getTime(),
++        })
++        shimRef.current = shim
++        let budgetWarned = false
++        const { handle, metadata } = createFastLedPatternHandle({
++          host,
++          rgb: shim.builtins.rgb as (r: number, g: number, b: number) => void,
++          output,
++          controls,
++          onBudget: () => {
++            if (budgetWarned) return
++            budgetWarned = true
++            useEditorStore.getState().setRenderAdaptation('FastLED loop() ran past its per-frame budget (runaway loop?); the Pattern keeps running.')
++          },
++        })
++        handleRef.current = handle
++        fastLedControlsRef.current = { patternId, controls, baseline: JSON.stringify(persistedControlPatch(controls, values)) }
++        useEditorStore.getState().setPatternVars(metadata.patternVars)
++        useEditorStore.getState().setControls(metadata.controls)
++        useControlStore.getState().resetControls(values)
++        const renderCompatibility = selectRenderCompatibility(layout.mapDim, metadata.renderFns)
++        useEditorStore.getState().setRenderAdaptation(fastLedLedCountNotice(host.ledCount(), layout.pixelCount))
++        stop = startLoop(layout, handle, shim, clock, renderCompatibility)
++      })()
++      return () => {
++        cancelled = true
++        fastLedControlsRef.current = null
++        stop?.()
++      }
++    }
++    fastLedControlsRef.current = null
++    queueMicrotask(() => setFastLedNotice(null))
++
+     // Bundle first so the Pattern's native dimensionality (highest render fn) is
+     // known before resolving its layout — it drives Recommended/default ordering,
+     // never a map filter.
+@@ -415,7 +533,24 @@ export function Preview({
+     }
+ 
+     return startLoop(layout, handle, shim, clock, renderCompatibility)
+-  }, [previewSource, viewportReady, fidelity, libraries, activeMapId, activeShapeId, activeSurfaceId, previewPixelCount, pixelCountCap, activeNormalizeMode, activeDemoName])
++  }, [previewSource, viewportReady, fidelity, libraries, activeMapId, activeShapeId, activeSurfaceId, previewPixelCount, pixelCountCap, activeNormalizeMode, activeDemoName, activePatternId, fastLedRetry])
++
++  // FastLED Patterns remember their Control values per Pattern (PatternRecord
++  // .controls, keyed by FastLED UI name). Debounced; only genuine changes from
++  // the values the Pattern opened with are written.
++  useEffect(() => {
++    const binding = fastLedControlsRef.current
++    if (!binding || binding.patternId === null || isEditorReadOnly) return
++    const patch = persistedControlPatch(binding.controls, controlValues)
++    const serialized = JSON.stringify(patch)
++    if (serialized === binding.baseline) return
++    const timer = setTimeout(() => {
++      if (fastLedControlsRef.current !== binding) return
++      binding.baseline = serialized
++      void usePatternStore.getState().updatePatternControls(binding.patternId!, patch)
++    }, FASTLED_CONTROL_PERSIST_MS)
++    return () => clearTimeout(timer)
++  }, [controlValues, isEditorReadOnly])
+ 
+   // Seed the live working state from the resolved settings cascade on open:
+   // one pass that composes per-pattern override → recommended (demos) → global-sticky
+@@ -677,6 +812,28 @@ export function Preview({
+               Last working preview
+             </div>
+           )}
++          {fastLedNotice !== null && previewUnavailableReason === null && !runtimeError && (
++            <div
++              role="status"
++              aria-live="polite"
++              data-testid="preview-fastled-status"
++              data-state={fastLedNotice}
++              className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/90 p-6 pointer-events-none"
++            >
++              <div className="max-w-xs text-center font-mono">
++                {fastLedNotice === 'compiling' ? (
++                  <div className="text-sm font-medium text-zinc-300">Compiling FastLED Pattern…</div>
++                ) : (
++                  <>
++                    <div className="text-sm font-medium text-amber-300">FastLED-Compiler nicht erreichbar</div>
++                    <div className="mt-2 text-xs leading-5 text-zinc-400">
++                      {fastLedServiceUrl || 'http://127.0.0.1:9996'} antwortet nicht. Der Launcher startet ihn automatisch, sonst <code>npm run service</code> in <code>fastled-integration</code>. Die Vorschau startet, sobald er läuft.
++                    </div>
++                  </>
++                )}
++              </div>
++            </div>
++          )}
+           {previewUnavailableReason !== null && (
+             <div
+               role="status"
+diff --git a/src/engine/fastled/fastledPreview.test.ts b/src/engine/fastled/fastledPreview.test.ts
+new file mode 100644
+index 00000000..1672e928
+--- /dev/null
++++ b/src/engine/fastled/fastledPreview.test.ts
+@@ -0,0 +1,23 @@
++import { describe, expect, it } from 'vitest'
++import { fastLedDefinesForLayout, fastLedLedCountNotice, fastLedSeed } from './fastledPreview'
++
++describe('fastledPreview helpers', () => {
++  it('passes the map pixel count and grid size as defines', () => {
++    expect(fastLedDefinesForLayout({ pixelCount: 144, layoutLabel: null })).toEqual({ PXLBLZ_NUM_LEDS: 144 })
++    expect(fastLedDefinesForLayout({ pixelCount: 256, layoutLabel: '32×8' })).toEqual({ PXLBLZ_NUM_LEDS: 256, PXLBLZ_WIDTH: 32, PXLBLZ_HEIGHT: 8 })
++    expect(fastLedDefinesForLayout({ pixelCount: 512, layoutLabel: '8×8×8' })).toEqual({ PXLBLZ_NUM_LEDS: 512 })
++    expect(fastLedDefinesForLayout({ pixelCount: 250, layoutLabel: '32×8' })).toEqual({ PXLBLZ_NUM_LEDS: 250 })
++  })
++
++  it('derives a stable non-zero seed', () => {
++    expect(fastLedSeed('pattern-a')).toBe(fastLedSeed('pattern-a'))
++    expect(fastLedSeed('pattern-a')).not.toBe(fastLedSeed('pattern-b'))
++    expect(fastLedSeed('')).toBeGreaterThan(0)
++  })
++
++  it('describes LED count mismatches only', () => {
++    expect(fastLedLedCountNotice(64, 64)).toBeNull()
++    expect(fastLedLedCountNotice(60, 64)).toContain('extra pixels stay black')
++    expect(fastLedLedCountNotice(80, 64)).toContain('not shown')
++  })
++})
+diff --git a/src/engine/fastled/fastledPreview.ts b/src/engine/fastled/fastledPreview.ts
+new file mode 100644
+index 00000000..39d996ee
+--- /dev/null
++++ b/src/engine/fastled/fastledPreview.ts
+@@ -0,0 +1,34 @@
++// Small pure helpers for running a FastLED Pattern in the preview.
++import type { FastLedDefines } from './fastledCompileClient'
++
++/**
++ * Compiler defines for the resolved layout: PXLBLZ_NUM_LEDS is always the map's
++ * pixel count; a regular 2D grid (`cols×rows` label) adds width and height.
++ */
++export function fastLedDefinesForLayout(layout: { pixelCount: number; layoutLabel: string | null }): FastLedDefines {
++  const defines: FastLedDefines = { PXLBLZ_NUM_LEDS: layout.pixelCount }
++  const grid = /^(\d+)×(\d+)$/.exec(layout.layoutLabel ?? '')
++  if (grid && Number(grid[1]) * Number(grid[2]) === layout.pixelCount) {
++    defines.PXLBLZ_WIDTH = Number(grid[1])
++    defines.PXLBLZ_HEIGHT = Number(grid[2])
++  }
++  return defines
++}
++
++/** Deterministic non-zero seed for Arduino random(), stable per Pattern. */
++export function fastLedSeed(key: string): number {
++  let h = 0x811c9dc5
++  for (let i = 0; i < key.length; i++) {
++    h ^= key.charCodeAt(i)
++    h = Math.imul(h, 0x01000193)
++  }
++  return (h >>> 0) || 1
++}
++
++/** One-line readout when the Pattern's LED count differs from the map. */
++export function fastLedLedCountNotice(ledCount: number, pixelCount: number): string | null {
++  if (ledCount === pixelCount) return null
++  return ledCount < pixelCount
++    ? `FastLED Pattern drives ${ledCount} LEDs; map has ${pixelCount} - extra pixels stay black`
++    : `FastLED Pattern drives ${ledCount} LEDs; map has ${pixelCount} - LEDs beyond the map are not shown`
++}
+diff --git a/src/engine/previewPanel.test.ts b/src/engine/previewPanel.test.ts
+index 24cce371..744306dc 100644
+--- a/src/engine/previewPanel.test.ts
++++ b/src/engine/previewPanel.test.ts
+@@ -13,3 +13,13 @@ describe('Pattern panel readouts and preferences', () => {
+     expect(describeVariablesReadout(['speed', 'missing'], { speed: 0.2 }).map(x => x.value)).toEqual(['2', '0.20', '—'])
+   })
+ })
++
++describe('Controls readout', () => {
++  it('formats FastLED ranged sliders as raw numbers', async () => {
++    const { describeControlsReadout } = await import('./previewPanel')
++    expect(describeControlsReadout([
++      { exportName: 'sliderSpeed', label: 'Speed', kind: 'slider', range: { min: 1, max: 120, step: 1 } },
++      { exportName: 'sliderMix', label: 'Mix', kind: 'slider' },
++    ], { sliderMix: 0.25 }).map((x) => x.value)).toEqual(['1', '25%'])
++  })
++})
+diff --git a/src/engine/previewPanel.ts b/src/engine/previewPanel.ts
+index cb04f53a..82e43750 100644
+--- a/src/engine/previewPanel.ts
++++ b/src/engine/previewPanel.ts
+@@ -20,12 +20,13 @@ export function describePreviewReadout(s: { lightSize: number; diffusion: number
+ export function describeVariablesReadout(names: string[], values: Record<string, unknown>): PanelReadout[] {
+   return [{ value: String(names.length) }, ...names.map(name => ({ label: name, value: formatWatchValue(values[name]), live: true }))]
+ }
+-export function describeControlsReadout(controls: { exportName: string; label: string; kind: string; secondsPresentation?: { scale: number } }[], values: Record<string, number | number[]>): PanelReadout[] {
++export function describeControlsReadout(controls: { exportName: string; label: string; kind: string; secondsPresentation?: { scale: number }; range?: { min: number; max: number; step?: number } }[], values: Record<string, number | number[]>): PanelReadout[] {
+   return controls.map(c => {
+     const raw = values[c.exportName]
+-    const value = typeof raw === 'number' ? raw : c.kind === 'toggle' ? 0 : 0.5
++    const value = typeof raw === 'number' ? raw : c.kind === 'toggle' ? 0 : c.range ? c.range.min : 0.5
+     const formatted = c.kind === 'toggle' ? (value === 1 ? 'on' : 'off')
+       : c.secondsPresentation ? `${Number((value * c.secondsPresentation.scale).toFixed(3))}s`
++      : c.kind === 'slider' && c.range ? String(Number(value.toFixed(3)))
+       : c.kind === 'slider' ? formatPercentageValue(value)
+       : (Array.isArray(raw) ? raw : [1, 1, 1]).map(n => n.toFixed(2)).join(', ')
+     return { label: c.label.toLowerCase(), value: formatted, live: true }
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,295 @@
+From 637186e35a6a6ac9c10ffeb062e68f417b719eb7 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 01:15:39 +1000
+Subject: [PATCH 6/8] Add "New FastLED pattern" and FastLED-aware header, deck,
+ lens (local #9002)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Patterns rail "Add pattern" menu: New FastLED pattern creates "Untitled
+  FastLED Pattern" from the starter template through the same create/open
+  path as a Pixelblaze Pattern (autosave, rename, delete unchanged).
+- Editor header and preview title show a "FastLED · nD" pill
+  (PatternDimPills) instead of render-function dimensions.
+- Preview deck: the renderer cell shows "FastLED" instead of the
+  Fast/Precise select (FastLED Patterns always render natively).
+- Rail dimension lens uses @pxlblz-dim for FastLED Patterns.
+- Copy code copies the raw C++ (there is no Pixelblaze artifact);
+  Download .epe is hidden and guarded for FastLED Patterns.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest PatternList + rail + dimLens (all passed), PreviewDeck (34 passed,
+2 pre-existing off-ladder failures as on upstream).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/App.tsx                                 | 15 +++++++++------
+ src/components/DimPills.tsx                 | 19 +++++++++++++++++++
+ src/components/PatternList.tsx              | 13 +++++++++----
+ src/components/PreviewDeck.tsx              | 14 ++++++++++----
+ src/components/rail/PatternsRailSection.tsx |  3 +++
+ src/engine/dimLens.test.ts                  |  7 +++++++
+ src/engine/dimLens.ts                       |  3 +++
+ 7 files changed, 60 insertions(+), 14 deletions(-)
+
+diff --git a/src/App.tsx b/src/App.tsx
+index 42877090..2b66d4d1 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -13,7 +13,8 @@ import {
+ } from '@/components/ui/alert-dialog'
+ import { Editor } from '@/components/Editor'
+ import { CompileStatusBadge } from '@/components/CompileStatusBadge'
+-import { DimPills } from '@/components/DimPills'
++import { PatternDimPills } from '@/components/DimPills'
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { PatternList } from '@/components/PatternList'
+ import { Preview } from '@/components/Preview'
+ import { PaneHeader } from '@/components/PaneHeader'
+@@ -81,7 +82,6 @@ import { stampArtifact } from '@/engine/artifactStamp'
+ import { LIBRARIES } from '@/pixelblaze/libs'
+ import { uniquePatternName } from '@/engine/patternName'
+ import { newPersonalContentId } from '@/engine/personalContentMetadata'
+-import { exportedDims } from '@/engine/exportedDims'
+ import {
+   galleryDirectoryBySlug,
+   galleryPatternBySlug,
+@@ -767,7 +767,10 @@ function StudioApp() {
+   const handleCopy = useCallback(() => {
+     if (!activePatternId) return
+     const pattern = userPatterns.find((p) => p.id === activePatternId)
+-    const code = stampedPatternArtifact(source, activePatternId, pattern?.name ?? 'Pattern', compileLibrarySet)
++    // A FastLED Pattern has no Pixelblaze artifact: Copy gives its C++ source.
++    const code = isFastLedSource(source)
++      ? source
++      : stampedPatternArtifact(source, activePatternId, pattern?.name ?? 'Pattern', compileLibrarySet)
+     navigator.clipboard.writeText(code)
+     setCopied(true)
+     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+@@ -775,7 +778,7 @@ function StudioApp() {
+   }, [activePatternId, source, userPatterns, compileLibrarySet])
+ 
+   const handleDownload = useCallback(async () => {
+-    if (!activePatternId) return
++    if (!activePatternId || isFastLedSource(source)) return
+     const pattern = userPatterns.find((p) => p.id === activePatternId)
+     const name = pattern?.name ?? 'Pattern'
+     const bundled = bundle(source, compileLibrarySet)
+@@ -1449,7 +1452,7 @@ function StudioApp() {
+                   aria-label="read-only"
+                 />
+               )}
+-              <DimPills dims={exportedDims(source)} />
++              <PatternDimPills source={source} />
+               {activePatternId !== null && <CompileStatusBadge />}
+               <SaveStatusBadge />
+             </span>
+@@ -1464,7 +1467,7 @@ function StudioApp() {
+                   ? handleForkDemo
+                   : undefined}
+                 onCopy={activePatternId !== null ? handleCopy : undefined}
+-                onDownload={activePatternId !== null ? handleDownload : undefined}
++                onDownload={activePatternId !== null && !isFastLedSource(source) ? handleDownload : undefined}
+                 onDelete={activePattern !== undefined ? () => setDeletePatternOpen(true) : undefined}
+               />
+             )}
+diff --git a/src/components/DimPills.tsx b/src/components/DimPills.tsx
+index 62d9fe06..fb903977 100644
+--- a/src/components/DimPills.tsx
++++ b/src/components/DimPills.tsx
+@@ -1,3 +1,6 @@
++import { exportedDims } from '@/engine/exportedDims'
++import { isFastLedSource, parseFastLedDirectives } from '@/engine/patternLanguage'
++
+ // The dimensionality cue shown next to a pattern title — one small pill listing
+ // every render dimension the pattern defines (e.g. "1, 2, 3D"). Shared so the editor
+ // title, the preview header, and the controller panel title render it
+@@ -17,3 +20,19 @@ export function DimPills({ dims }: { dims: (1 | 2 | 3)[] }) {
+     </span>
+   )
+ }
++
++// The same cue for any Pattern source: a FastLED Pattern shows a FastLED pill
++// with its `@pxlblz-dim` dimension (its C++ defines no render functions).
++export function PatternDimPills({ source }: { source: string }) {
++  if (!isFastLedSource(source)) return <DimPills dims={exportedDims(source)} />
++  const { dim } = parseFastLedDirectives(source)
++  return (
++    <span
++      data-testid="fastled-pill"
++      title={`FastLED Pattern (C++), ${dim}D layout. Runs in PXLBLZ-IDE only; output goes through the LED router.`}
++      className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-structural"
++    >
++      FastLED · {dim}D
++    </span>
++  )
++}
+diff --git a/src/components/PatternList.tsx b/src/components/PatternList.tsx
+index a1fa0107..83da1555 100644
+--- a/src/components/PatternList.tsx
++++ b/src/components/PatternList.tsx
+@@ -3,6 +3,7 @@ import { LIBRARIES } from '@/pixelblaze/libs'
+ import { DEMOS } from '@/pixelblaze/stock/patterns'
+ import { uniquePatternName } from '@/engine/patternName'
+ import { NEW_PATTERN_SRC } from '@/pixelblaze/newPattern'
++import { NEW_FASTLED_PATTERN_SRC } from '@/engine/fastled/newFastLedPattern'
+ import { MAP_SKELETON } from '@/engine/maps'
+ import { MIXIN_SKELETON } from '@/engine/mixins'
+ import {
+@@ -632,11 +633,14 @@ export function PatternList({
+ 
+   // Create a fresh "Untitled Pattern" and open it. Lives next to Patterns
+   // (#141) so a new pattern is created right by its list.
+-  function handleCreatePattern() {
++  // "New FastLED pattern" uses the same path with the FastLED starter (C++,
++  // marker line, PXLBLZ_NUM_LEDS, UISliders).
++  function handleCreatePattern(language: 'pixelblaze' | 'fastled' = 'pixelblaze') {
+     if (!personalWorkspaceAuthenticated) return
+     const id = newPersonalContentId()
+-    const name = uniquePatternName('Untitled Pattern', userPatterns.map((p) => p.name))
+-    const record: PatternRecord = { id, name, src: NEW_PATTERN_SRC, controls: {}, updatedAt: Date.now() }
++    const name = uniquePatternName(language === 'fastled' ? 'Untitled FastLED Pattern' : 'Untitled Pattern', userPatterns.map((p) => p.name))
++    const src = language === 'fastled' ? NEW_FASTLED_PATTERN_SRC : NEW_PATTERN_SRC
++    const record: PatternRecord = { id, name, src, controls: {}, updatedAt: Date.now() }
+     requestBufferReplacement(() => executeStudioOperation({
+       surface: 'rail',
+       action: 'create',
+@@ -1100,7 +1104,8 @@ export function PatternList({
+             onScroll={updateScrollMetrics}
+             onLensChange={setDimLens}
+             onQueryChange={setQuery}
+-            onCreatePattern={handleCreatePattern}
++            onCreatePattern={() => handleCreatePattern()}
++            onCreateFastLedPattern={() => handleCreatePattern('fastled')}
+             onToggleStockPatterns={() => setShowStockPatterns((visible) => !visible)}
+             onOpenUserPattern={(pattern) => { openUserPattern(pattern); onEntityChosen?.() }}
+             onOpenStockPattern={(name) => { openStockPatternRoute(name); onEntityChosen?.() }}
+diff --git a/src/components/PreviewDeck.tsx b/src/components/PreviewDeck.tsx
+index 92eba6c5..e6a6a782 100644
+--- a/src/components/PreviewDeck.tsx
++++ b/src/components/PreviewDeck.tsx
+@@ -23,8 +23,8 @@ import { SpeedSelector } from '@/components/SpeedSelector'
+ import { DeckSelect } from '@/components/DeckSelect'
+ import { DeckSlider } from '@/components/DeckSlider'
+ import { ControlsPanel } from '@/components/ControlsPanel'
+-import { DimPills } from '@/components/DimPills'
+-import { exportedDims } from '@/engine/exportedDims'
++import { PatternDimPills } from '@/components/DimPills'
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { Variables } from '@/components/Variables'
+ import { PixelCountPopover } from '@/components/PixelCountPopover'
+ import { previewResolutionSteps, realizedResolutionCount } from '@/engine/previewResolution'
+@@ -173,7 +173,7 @@ function PrimaryBand() {
+         >
+           {previewPatternName || '—'}
+         </span>
+-        <DimPills dims={exportedDims(previewSource)} />
++        <PatternDimPills source={previewSource} />
+         <ActiveMapBakeStatus />
+       </div>
+       {showReset && (
+@@ -365,6 +365,8 @@ export function PreviewViewportSection({
+   const elapsed = usePreviewStore((s) => s.elapsed)
+   const layoutLabel = useEditorStore((s) => s.layoutLabel)
+   const solidEligible = useEditorStore((s) => s.solidEligible)
++  // FastLED Patterns always render natively (fast path); Precise 16.16 does not apply.
++  const fastLed = useEditorStore((s) => profile === 'pattern' && isFastLedSource(s.previewSource))
+   const solidity = useMapStore((s) => s.activeSolidity)
+   const setSolidity = useMapStore((s) => s.setActiveSolidity)
+   const pattern = profile === 'pattern'
+@@ -392,7 +394,7 @@ export function PreviewViewportSection({
+       summaryRow={summaryMode}
+       expanded={summaryMode ? expanded : undefined}
+       onExpandedChange={summaryMode ? setExpanded : undefined}
+-      summary={summaryMode ? <PanelReadout items={describePreviewReadout({ lightSize, diffusion, fidelity, speed, fps, elapsed, layout: layoutLabel })} /> : undefined}
++      summary={summaryMode ? <PanelReadout items={describePreviewReadout({ lightSize, diffusion, fidelity: fastLed ? 'fast' : fidelity, speed, fps, elapsed, layout: layoutLabel })} /> : undefined}
+       actions={headerActions}
+     >
+       <DeckGrid className="mb-[5px]">
+@@ -436,6 +438,9 @@ export function PreviewViewportSection({
+       </DeckGrid>
+       <DeckGrid gapY="gap-y-[3px]" className="mb-[5px]">
+         <DeckCell label="renderer">
++          {fastLed ? (
++            <span className="text-zinc-400" title="FastLED Patterns render natively (compiled FastLED); Precise does not apply." data-testid="fastled-renderer">FastLED</span>
++          ) : (
+           <DeckSelect
+             ariaLabel="Renderer"
+             value={fidelity}
+@@ -447,6 +452,7 @@ export function PreviewViewportSection({
+             menuWidthClass="w-28"
+             portaled={pattern}
+           />
++          )}
+         </DeckCell>
+         {pattern ? (
+           <DeckCell label="speed">
+diff --git a/src/components/rail/PatternsRailSection.tsx b/src/components/rail/PatternsRailSection.tsx
+index 3898e035..2ebe1286 100644
+--- a/src/components/rail/PatternsRailSection.tsx
++++ b/src/components/rail/PatternsRailSection.tsx
+@@ -36,6 +36,7 @@ export function PatternsRailSection({
+   onLensChange,
+   onQueryChange,
+   onCreatePattern,
++  onCreateFastLedPattern,
+   onToggleStockPatterns,
+   onOpenUserPattern,
+   onOpenStockPattern,
+@@ -63,6 +64,7 @@ export function PatternsRailSection({
+   onLensChange: (lens: DimLens) => void
+   onQueryChange: (query: string) => void
+   onCreatePattern: () => void
++  onCreateFastLedPattern?: () => void
+   onToggleStockPatterns: () => void
+   onOpenUserPattern: (pattern: PatternRecord) => void
+   onOpenStockPattern: (name: string) => void
+@@ -94,6 +96,7 @@ export function PatternsRailSection({
+             <HeaderAction icon={<FolderOpen size={14} aria-hidden />} title="Open pattern from .epe file" onClick={() => fileInputRef.current?.click()} />
+             <HeaderMenu title="Add pattern" items={[
+               { label: 'New pattern', onSelect: onCreatePattern },
++              ...(onCreateFastLedPattern ? [{ label: 'New FastLED pattern', onSelect: onCreateFastLedPattern }] : []),
+               { label: 'New folder', onSelect: () => personalTreeRef.current?.createFolder() },
+             ]} />
+           </>
+diff --git a/src/engine/dimLens.test.ts b/src/engine/dimLens.test.ts
+index afa7e0ae..9ed97db6 100644
+--- a/src/engine/dimLens.test.ts
++++ b/src/engine/dimLens.test.ts
+@@ -53,3 +53,10 @@ describe('matchesQuery', () => {
+     expect(matchesQuery('PlasmaNebula', '  plasma  ')).toBe(true)
+   })
+ })
++
++describe('nativeDim for FastLED Patterns', () => {
++  it('reads the @pxlblz-dim directive (default 1D)', () => {
++    expect(nativeDim('// @pxlblz-language fastled\n#include <FastLED.h>\n')).toBe(1)
++    expect(nativeDim('// @pxlblz-language fastled\n// @pxlblz-dim 3\n#include <FastLED.h>\n')).toBe(3)
++  })
++})
+diff --git a/src/engine/dimLens.ts b/src/engine/dimLens.ts
+index 29e650ae..b39ff012 100644
+--- a/src/engine/dimLens.ts
++++ b/src/engine/dimLens.ts
+@@ -7,6 +7,7 @@
+ // `render` and `render3D` is "3D" and appears only under the 3D lens.
+ 
+ import { exportedDims } from './exportedDims'
++import { isFastLedSource, parseFastLedDirectives } from './patternLanguage'
+ 
+ export type DimLens = 'all' | 1 | 2 | 3
+ 
+@@ -14,6 +15,8 @@ export type DimLens = 'all' | 1 | 2 | 3
+ // Defaults to 2 when none is defined, matching `nativeDimension`'s default so the
+ // lens and the preview lock agree.
+ export function nativeDim(src: string): 1 | 2 | 3 {
++  // A FastLED Pattern declares its dimension with `// @pxlblz-dim` (default 1).
++  if (isFastLedSource(src)) return parseFastLedDirectives(src).dim
+   const dims = exportedDims(src)
+   return dims.length ? (Math.max(...dims) as 1 | 2 | 3) : 2
+ }
+-- 
+2.55.0.windows.3
+

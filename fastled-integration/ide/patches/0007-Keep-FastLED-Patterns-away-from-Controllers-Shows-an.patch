@@ -1,0 +1,430 @@
+From d3317d752c2fa017849d91b9b819857c4baca8af Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 01:26:56 +1000
+Subject: [PATCH 7/8] Keep FastLED Patterns away from Controllers, Shows and
+ the agent (local #9002)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+DESIGN.md §7: one helper (isFastLedSource) wherever C++ could reach a
+Pixelblaze path, so a FastLED Pattern is never sent to a Controller and
+nothing crashes on one.
+
+- Send to Controller: Pattern subjects now honour deliveryBlocker in
+  describeControllerActionRow; a FastLED Pattern disables Run and Save
+  with "FastLED Patterns run in PXLBLZ-IDE only; output goes through the
+  LED router". pushActivePattern refuses FastLED source (defence in depth).
+- Background saved-artifact reconciliation and Controller saved-program
+  matching/import skip FastLED Patterns.
+- Show pickers (v1 editor options, v2 timeline source choices) omit
+  FastLED Patterns; compileShowForPreview (Stage, delivery, export, agent)
+  and the v2 prepared stage refuse an existing FastLED member with an
+  explicit message (engine/showFastLedGuard.ts); automatable-control
+  discovery returns none for C++.
+- Agent discovery/editorAdmission skip FastLED Patterns, so one C++ source
+  no longer makes discovery return nothing for every Pattern.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest controllerStore + controllerActionRow (engine + component) +
+editorAdmission.discovery + agentDiscovery + showFastLedGuard +
+showPreviewArtifact + showPreparedStageV2 + showV2TimelineEditorModel +
+showPatternControls (all passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/agent/editorAdmission.ts                  |  4 ++-
+ src/components/ControllerActionRow.test.tsx   | 14 +++++++++
+ src/components/ControllerActionRow.tsx        |  6 +++-
+ .../ControllerSavedProgramsPane.tsx           |  6 ++--
+ src/components/ShowEditor.tsx                 |  5 +++-
+ src/engine/agentDiscovery.test.ts             | 10 +++++++
+ src/engine/agentDiscovery.ts                  |  3 +-
+ src/engine/controllerActionRow.test.ts        | 19 ++++++++++++
+ src/engine/controllerActionRow.ts             |  6 ++++
+ src/engine/showFastLedGuard.test.ts           | 29 +++++++++++++++++++
+ src/engine/showFastLedGuard.ts                | 12 ++++++++
+ src/engine/showPatternControls.ts             |  3 ++
+ src/engine/showPreparedStageV2.ts             |  3 ++
+ src/engine/showPreviewArtifact.ts             |  3 ++
+ src/engine/showV2TimelineEditorModel.ts       |  3 +-
+ src/store/controllerStore.test.ts             | 12 ++++++++
+ src/store/controllerStore.ts                  |  9 +++++-
+ 17 files changed, 139 insertions(+), 8 deletions(-)
+ create mode 100644 src/engine/showFastLedGuard.test.ts
+ create mode 100644 src/engine/showFastLedGuard.ts
+
+diff --git a/src/agent/editorAdmission.ts b/src/agent/editorAdmission.ts
+index 43a97a17..0a702f0a 100644
+--- a/src/agent/editorAdmission.ts
++++ b/src/agent/editorAdmission.ts
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import type { ShowPatternRef } from '@/engine/personalContentRecords'
+ import type { ShowEditRequest, ShowEditReceipt, ShowEditCompletion } from '@/engine/showEditAdmission'
+ import type { ShowInputWaitReceipt } from '@/engine/showInputWait'
+@@ -105,7 +106,8 @@ export function createAgentEditorAdmission(showId: string, getContext: () => unk
+       loaded: patterns.patternsLoaded && libraries.librariesLoaded,
+       sources: [
+         ...Object.entries(stock).map(([id, source]) => ({ kind: 'stock' as const, id, name: id, source })),
+-        ...patterns.userPatterns.map(pattern => ({ kind: 'user' as const, id: pattern.id, name: pattern.name, source: personal[pattern.id] })),
++        // FastLED Patterns are not Pixelblaze source; the agent edits Pixelblaze Patterns and Shows only.
++        ...patterns.userPatterns.filter(pattern => !isFastLedSource(pattern.src)).map(pattern => ({ kind: 'user' as const, id: pattern.id, name: pattern.name, source: personal[pattern.id] })),
+       ],
+       stock,
+       personal,
+diff --git a/src/components/ControllerActionRow.test.tsx b/src/components/ControllerActionRow.test.tsx
+index 3d2e7e12..6d3e1aa8 100644
+--- a/src/components/ControllerActionRow.test.tsx
++++ b/src/components/ControllerActionRow.test.tsx
+@@ -145,3 +145,17 @@ it('keeps failed Pattern delivery visible across reopen and permits a deliberate
+   fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }))
+   expect(pushActivePattern).toHaveBeenCalledTimes(2)
+ })
++
++it('blocks Run and Save for a FastLED Pattern with the LED-router reason', () => {
++  const pushActivePattern = vi.fn()
++  const src = '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid loop() {}\n'
++  useEditorStore.setState({ previewSource: src, source: src })
++  useControllerStore.setState({ pushActivePattern, requestPush: pushActivePattern })
++  render(<ControllerActionRow />)
++  const run = screen.getByRole('button', { name: 'Run' })
++  expect(run).toHaveAttribute('aria-disabled', 'true')
++  fireEvent.click(run)
++  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
++  expect(pushActivePattern).not.toHaveBeenCalled()
++  expect(document.body).toHaveTextContent(/FastLED Patterns run in PXLBLZ-IDE only/)
++})
+diff --git a/src/components/ControllerActionRow.tsx b/src/components/ControllerActionRow.tsx
+index 86d0874e..f5cbf711 100644
+--- a/src/components/ControllerActionRow.tsx
++++ b/src/components/ControllerActionRow.tsx
+@@ -1,3 +1,7 @@
++import { isFastLedSource } from '@/engine/patternLanguage'
++
++// A FastLED Pattern (C++) is never sent to a Controller (Pixelblaze).
++const FASTLED_DELIVERY_BLOCKER = 'FastLED Patterns run in PXLBLZ-IDE only; output goes through the LED router'
+ import { SaveFailureNotice } from './SaveFailureNotice'
+ import { useEffect, useId, useSyncExternalStore } from 'react'
+ import { Check, Play, RotateCw, Save } from 'lucide-react'
+@@ -108,7 +112,7 @@ export function ControllerActionRow() {
+     ? showDelivery.pushing || showDelivery.succeeded
+     : pushing || !!pushResult?.ok
+   const view = describeControllerActionRow({
+-    subject: showDelivery?.subject ?? (route.kind === 'studio' && route.entity?.kind === 'patterns' && route.entity.id && patternName ? { kind: 'pattern', id: route.entity.id, name: patternName, deliveryBlocker: null, runAlreadyPushed: alreadyPushed('run'), saveAlreadyPushed: alreadyPushed('save') } : null),
++    subject: showDelivery?.subject ?? (route.kind === 'studio' && route.entity?.kind === 'patterns' && route.entity.id && patternName ? { kind: 'pattern', id: route.entity.id, name: patternName, deliveryBlocker: isFastLedSource(previewSource) ? FASTLED_DELIVERY_BLOCKER : null, runAlreadyPushed: alreadyPushed('run'), saveAlreadyPushed: alreadyPushed('save') } : null),
+     route,
+     patternName,
+     status,
+diff --git a/src/components/ControllerSavedProgramsPane.tsx b/src/components/ControllerSavedProgramsPane.tsx
+index 84747acd..cc9135f9 100644
+--- a/src/components/ControllerSavedProgramsPane.tsx
++++ b/src/components/ControllerSavedProgramsPane.tsx
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+ import {
+   ChevronDown,
+@@ -965,7 +966,8 @@ export function ControllerSavedProgramsPane({ profile }: { profile: ControllerPr
+     mapDim: profileController?.mapDim ?? null,
+     profileSignatureReady,
+     studioPatterns: [
+-      ...userPatterns.map((pattern) => ({
++      // FastLED Patterns can never match a Controller program.
++      ...userPatterns.filter((pattern) => !isFastLedSource(pattern.src)).map((pattern) => ({
+         bindingKey: pattern.id,
+         routeId: pattern.id,
+         name: pattern.name,
+@@ -1048,7 +1050,7 @@ export function ControllerSavedProgramsPane({ profile }: { profile: ControllerPr
+         decision: decideSavedProgramImport({
+           recovered,
+           studioPatterns: [
+-            ...userPatterns.map((pattern) => ({ id: pattern.id, name: pattern.name })),
++            ...userPatterns.filter((pattern) => !isFastLedSource(pattern.src)).map((pattern) => ({ id: pattern.id, name: pattern.name })),
+             ...Object.keys(DEMOS).map((name) => ({
+               id: `demo:${name}`,
+               routeId: name,
+diff --git a/src/components/ShowEditor.tsx b/src/components/ShowEditor.tsx
+index 8bec35d7..fd2a7a5c 100644
+--- a/src/components/ShowEditor.tsx
++++ b/src/components/ShowEditor.tsx
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { showDeliveryInvalidationMessage } from '@/engine/showControllerDelivery'
+ import { useShowControllerDelivery } from './useShowControllerDelivery'
+ import { repeatScaleAt, showV2SampleRepeatLaneVisible } from '../engine/showV2ScalarProperties'
+@@ -2916,8 +2917,10 @@ export function ShowEditor({
+     cancel: cancelShowSend,
+   } : null)
+ 
++  // FastLED Patterns cannot be part of a Show (it compiles to one Pixelblaze
++  // Pattern); compile dependencies keep the full list so a stale reference fails loudly.
+   const editorPatternOptions: ShowPatternOption[] = [
+-    ...userPatterns.map((pattern) => ({
++    ...userPatterns.filter((pattern) => !isFastLedSource(pattern.src)).map((pattern) => ({
+       label: pattern.name,
+       ref: { kind: 'user' as const, id: pattern.id },
+       group: 'Personal' as const,
+diff --git a/src/engine/agentDiscovery.test.ts b/src/engine/agentDiscovery.test.ts
+index 6ade137f..b6341d7a 100644
+--- a/src/engine/agentDiscovery.test.ts
++++ b/src/engine/agentDiscovery.test.ts
+@@ -85,3 +85,13 @@ describe('agent Controller-profile discovery', () => {
+     expect(result).not.toContainEqual(expect.objectContaining({ id: 'fake-profile' }))
+   })
+ })
++
++describe('agent Pattern discovery with FastLED Patterns', () => {
++  it('skips FastLED (C++) Patterns instead of failing discovery for every Pattern', () => {
++    const result = projectAgentPatterns([
++      { kind: 'user' as const, id: 'pb', name: 'Pixelblaze', source: 'export function render(index) { hsv(index, 1, 1) }' },
++      { kind: 'user' as const, id: 'fl', name: 'FastLED', source: '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid loop() {}\n' },
++    ], {})
++    expect(result?.map((pattern) => pattern.id)).toEqual(['pb'])
++  })
++})
+diff --git a/src/engine/agentDiscovery.ts b/src/engine/agentDiscovery.ts
+index 294858ac..948027fe 100644
+--- a/src/engine/agentDiscovery.ts
++++ b/src/engine/agentDiscovery.ts
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from './patternLanguage'
+ import { bundle } from './bundle'
+ 
+ export type AgentPatternKind = 'stock' | 'user'
+@@ -54,7 +55,7 @@ export function projectAgentPatterns(
+   filter: AgentPatternDiscoveryFilter = {},
+ ): AgentPatternDiscovery[] | undefined {
+   const query = filter.query?.trim().toLowerCase()
+-  const selected = sources.filter(pattern => (
++  const selected = sources.filter(pattern => !isFastLedSource(pattern.source) && (
+     (!filter.kind || pattern.kind === filter.kind)
+     && (!query || pattern.id.toLowerCase().includes(query) || pattern.name.toLowerCase().includes(query))
+   ))
+diff --git a/src/engine/controllerActionRow.test.ts b/src/engine/controllerActionRow.test.ts
+index 14437d76..405922b0 100644
+--- a/src/engine/controllerActionRow.test.ts
++++ b/src/engine/controllerActionRow.test.ts
+@@ -275,3 +275,22 @@ describe('projectControllerProgramMenu', () => {
+     }).showFilter).toBe(true)
+   })
+ })
++
++describe('Pattern delivery blockers', () => {
++  it('disables Run and Save with the Pattern subject blocker', () => {
++    const view = describeControllerActionRow({
++      subject: { kind: 'pattern', id: 'p1', name: 'FastLED', deliveryBlocker: 'FastLED Patterns run in PXLBLZ-IDE only', runAlreadyPushed: false, saveAlreadyPushed: false },
++      route: { kind: 'studio', entity: { kind: 'patterns', id: 'p1' } },
++      patternName: 'FastLED',
++      status: { kind: 'connected', controller: { id: 'c1', address: '10.0.0.9', deviceId: 'c1' } },
++      compileStatus: 'good',
++      runAlreadyPushed: false,
++      saveAlreadyPushed: false,
++      working: false,
++      programsRead: true,
++      programCount: 1,
++    })
++    expect(view.run).toEqual({ enabled: false, reason: 'FastLED Patterns run in PXLBLZ-IDE only' })
++    expect(view.save).toEqual(view.run)
++  })
++})
+diff --git a/src/engine/controllerActionRow.ts b/src/engine/controllerActionRow.ts
+index c0b5ae6e..57bb527e 100644
+--- a/src/engine/controllerActionRow.ts
++++ b/src/engine/controllerActionRow.ts
+@@ -123,6 +123,12 @@ export function describeControllerActionRow({
+     return { subject: visiblePatternName, run: gate, save: gate, switch: switchGate }
+   }
+ 
++  // A Pattern that can never be a Controller artifact (a FastLED Pattern).
++  if (subject?.kind === 'pattern' && subject.deliveryBlocker) {
++    const gate = disabled(subject.deliveryBlocker)
++    return { subject: visiblePatternName, run: gate, save: gate, switch: switchGate }
++  }
++
+   const run = describeSendToController({ status, compileStatus, alreadyPushed: subject?.runAlreadyPushed ?? runAlreadyPushed })
+   const save = describeSendToController({ status, compileStatus, alreadyPushed: subject?.saveAlreadyPushed ?? saveAlreadyPushed })
+ 
+diff --git a/src/engine/showFastLedGuard.test.ts b/src/engine/showFastLedGuard.test.ts
+new file mode 100644
+index 00000000..59e5b8db
+--- /dev/null
++++ b/src/engine/showFastLedGuard.test.ts
+@@ -0,0 +1,29 @@
++import { describe, expect, it } from 'vitest'
++import { fastLedShowMemberError } from './showFastLedGuard'
++import { compileShowForPreview } from './showPreviewArtifact'
++import { createDefaultShow, updateShowCellPattern } from './showModel'
++import type { PatternRecord } from './personalContentRecords'
++
++const FASTLED: PatternRecord = {
++  id: 'fl-1',
++  name: 'Rainbow FastLED',
++  src: '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid loop() {}\n',
++  controls: {},
++  updatedAt: 1,
++}
++
++describe('Show FastLED guard', () => {
++  it('names the FastLED member and accepts Pixelblaze-only sources', () => {
++    expect(fastLedShowMemberError(['export function render(i) {}'], [FASTLED])).toBeNull()
++    expect(fastLedShowMemberError([FASTLED.src], [FASTLED])).toContain('"Rainbow FastLED" is a FastLED Pattern')
++  })
++
++  it('refuses to compile a Show that references a FastLED Pattern', () => {
++    const show = createDefaultShow('show-fastled', 'With FastLED', 1)
++    const cell = show.cells[0]
++    const withFastLed = updateShowCellPattern(show, cell.id, { pattern: { kind: 'user', id: FASTLED.id }, patternName: FASTLED.name })
++    const compiled = compileShowForPreview(withFastLed, [FASTLED], undefined, {})
++    expect(compiled.artifact).toBeNull()
++    expect(compiled.error).toContain('Shows can only contain Pixelblaze Patterns')
++  })
++})
+diff --git a/src/engine/showFastLedGuard.ts b/src/engine/showFastLedGuard.ts
+new file mode 100644
+index 00000000..a9bd27c6
+--- /dev/null
++++ b/src/engine/showFastLedGuard.ts
+@@ -0,0 +1,12 @@
++// A Show compiles into one portable Pixelblaze Pattern, so a FastLED Pattern
++// (C++) can never be one of its members. Every Show compile path refuses it with
++// this explicit message instead of failing inside the Pixelblaze parser.
++import type { PatternRecord } from './personalContentRecords'
++import { isFastLedSource } from './patternLanguage'
++
++export function fastLedShowMemberError(sources: readonly string[], userPatterns: readonly PatternRecord[]): string | null {
++  const source = sources.find((candidate) => isFastLedSource(candidate))
++  if (source === undefined) return null
++  const name = userPatterns.find((pattern) => pattern.src === source)?.name ?? 'A Pattern'
++  return `"${name}" is a FastLED Pattern; Shows can only contain Pixelblaze Patterns. FastLED Patterns run in the Patterns preview (a Playlist will sequence them later).`
++}
+diff --git a/src/engine/showPatternControls.ts b/src/engine/showPatternControls.ts
+index 89c398e4..186e365e 100644
+--- a/src/engine/showPatternControls.ts
++++ b/src/engine/showPatternControls.ts
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from './patternLanguage'
+ import { bundle, inspectPatternMetadata } from './bundle'
+ import { CONTROL_SECONDS_PRESENTATIONS, type ControlSecondsPresentation } from '@/pixelblaze/controlDescriptions'
+ 
+@@ -42,6 +43,8 @@ export function discoverAutomatablePatternControls(
+   savedControls: Record<string, number | number[]> = {},
+   stockPatternId?: string,
+ ): AutomatablePatternControl[] {
++  // FastLED (C++) has no Pixelblaze controls to automate (and is refused by the Show compiler).
++  if (isFastLedSource(source)) return []
+   const seconds = stockPatternId ? CONTROL_SECONDS_PRESENTATIONS[stockPatternId] : undefined
+   return inspectPatternMetadata(source).controls.flatMap((control) => {
+     if (control.kind !== 'slider') return []
+diff --git a/src/engine/showPreparedStageV2.ts b/src/engine/showPreparedStageV2.ts
+index ecf748a0..4092c55f 100644
+--- a/src/engine/showPreparedStageV2.ts
++++ b/src/engine/showPreparedStageV2.ts
+@@ -1,3 +1,4 @@
++import { fastLedShowMemberError } from './showFastLedGuard'
+ import { compileLibraries } from './libraries'
+ import { LIBRARIES } from '../pixelblaze/libs'
+ import { DEMOS, resolveStockPatternId } from '../pixelblaze/stock/patterns'
+@@ -145,6 +146,8 @@ function capturedStageCompileInputsV2(snapshot: ShowRecordV2, inputs: ShowPrepar
+     const source = preparedShowPatternSourceV2(instance.pattern, assets.patterns)
+     if (source !== undefined) sources[instance.id] = source
+   }
++  const fastLed = fastLedShowMemberError(Object.values(sources), assets.patterns)
++  if (fastLed) return { status: 'refused', message: fastLed }
+   const libraries = compileLibraries(LIBRARIES, assets.libraries)
+   return { status: 'ready', lookup: { byCellId: {}, byPatternInstanceId: sources, stageDimension }, libraries }
+ }
+diff --git a/src/engine/showPreviewArtifact.ts b/src/engine/showPreviewArtifact.ts
+index 98281ef6..a7cf4508 100644
+--- a/src/engine/showPreviewArtifact.ts
++++ b/src/engine/showPreviewArtifact.ts
+@@ -1,3 +1,4 @@
++import { fastLedShowMemberError } from './showFastLedGuard'
+ import { recordAgentObservation, showRecordDigest } from '@/dev/agentObservation'
+ import type { ControllerZone } from './controllerProfile'
+ import {
+@@ -100,6 +101,8 @@ export function compileShowForPreview(
+         sourceForShowPatternRef(instance.pattern, userPatterns),
+       ]),
+     )
++    const fastLed = fastLedShowMemberError([...Object.values(byCellId), ...Object.values(byPatternInstanceId)], userPatterns)
++    if (fastLed) return { artifact: null, error: fastLed }
+     const recipe = showRecordToCompileRecipe(show, {
+       byCellId,
+       byPatternInstanceId,
+diff --git a/src/engine/showV2TimelineEditorModel.ts b/src/engine/showV2TimelineEditorModel.ts
+index 644a49bc..9b2564b1 100644
+--- a/src/engine/showV2TimelineEditorModel.ts
++++ b/src/engine/showV2TimelineEditorModel.ts
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from './patternLanguage'
+ import { DEMOS, resolveStockPatternId } from '../pixelblaze/stock/patterns'
+ import { defaultGroupRuntimeIdV2, materializeShowGroupsV2 } from './showGroupsV2'
+ import type { ShowClipV2, ShowRecordV2 } from './showCompositionV2'
+@@ -22,7 +23,7 @@ export function buildShowV2TimelineEditorModel(capture: ShowV2TimelineCapture):
+   let effective: ShowRecordV2
+   try { effective = materializeShowGroupsV2(record) } catch { return { sources: [], rows: [] } }
+   const stocks = new Set([...Object.keys(DEMOS), ...effective.composition.patternInstances.filter(instance => instance.pattern.kind === 'stock' && Object.prototype.hasOwnProperty.call(DEMOS, resolveStockPatternId(instance.pattern.id))).map(instance => instance.pattern.id)])
+-  const choices = [...patterns.map(pattern => ({ reference: { kind: 'user' as const, id: pattern.id }, name: pattern.name, group: 'Personal' as const })), ...[...stocks].sort().map(id => ({ reference: { kind: 'stock' as const, id }, name: id, group: 'Built-in' as const }))]
++  const choices = [...patterns.filter(pattern => !isFastLedSource(pattern.src)).map(pattern => ({ reference: { kind: 'user' as const, id: pattern.id }, name: pattern.name, group: 'Personal' as const })), ...[...stocks].sort().map(id => ({ reference: { kind: 'stock' as const, id }, name: id, group: 'Built-in' as const }))]
+   const sources = choices.map(choice => {
+     const runtimeIds = effective.composition.patternInstances.filter(instance => instance.pattern.kind === choice.reference.kind && instance.pattern.id === choice.reference.id).map(instance => instance.id).sort()
+     return { ...choice, reference: Object.freeze({ ...choice.reference }), key: `${choice.reference.kind}:${choice.reference.id}`, label: choices.filter(other => other.name === choice.name).length > 1 ? `${choice.name} · ${choice.reference.id}` : choice.name, runtimeIds, defaultRuntimeId: runtimeIds.length === 0 ? 'first' : runtimeIds.length === 1 ? runtimeIds[0] : null }
+diff --git a/src/store/controllerStore.test.ts b/src/store/controllerStore.test.ts
+index 38875bda..8718d560 100644
+--- a/src/store/controllerStore.test.ts
++++ b/src/store/controllerStore.test.ts
+@@ -2195,6 +2195,18 @@ describe('controllerStore (keyed)', () => {
+       expect(store().pushResult).toBeNull()
+     })
+ 
++    it('never sends a FastLED Pattern to a Controller', async () => {
++      await store().addController('10.0.0.5')
++      usePatternStore.setState({ activePatternId: 'pat-1' })
++      useEditorStore.setState({ previewSource: '// @pxlblz-language fastled\n#include <FastLED.h>\nvoid loop() {}\n' })
++
++      await store().pushActivePattern()
++
++      expect(created.get('10.0.0.5')!.pushed).toHaveLength(0)
++      expect(store().pushing).toBe(false)
++      expect(store().pushResult).toEqual({ ok: false, message: expect.stringContaining('FastLED Patterns run in PXLBLZ-IDE only') })
++    })
++
+     it('surfaces a compile failure as an error result without pushing', async () => {
+       await store().addController('10.0.0.5')
+       await store().setRendererPaused('10.0.0.5', true)
+diff --git a/src/store/controllerStore.ts b/src/store/controllerStore.ts
+index 9c051b49..d80037ac 100644
+--- a/src/store/controllerStore.ts
++++ b/src/store/controllerStore.ts
+@@ -1,3 +1,4 @@
++import { isFastLedSource } from '@/engine/patternLanguage'
+ import { create } from 'zustand'
+ import { persist } from 'zustand/middleware'
+ import {
+@@ -1241,7 +1242,8 @@ export const useControllerStore = create<ControllerConnectionState>()(
+             }]
+           })
+           const artifacts = [
+-            ...patternState.userPatterns.map((pattern) => ({
++            // FastLED Patterns (C++) can never be a Controller artifact.
++            ...patternState.userPatterns.filter((pattern) => !isFastLedSource(pattern.src)).map((pattern) => ({
+               bindingKey: pattern.id,
+               name: pattern.name,
+               source: pattern.src,
+@@ -1853,6 +1855,11 @@ export const useControllerStore = create<ControllerConnectionState>()(
+           // The button's gate already guarantees a connected Controller + a matching
+           // active pattern, but guard anyway so a stray call is an inert no-op.
+           if (!controllerId || !patternId || !previewSource) return
++          // Defence in depth: the action row already blocks FastLED Patterns.
++          if (isFastLedSource(previewSource)) {
++            set({ pushResult: { ok: false, message: 'FastLED Patterns run in PXLBLZ-IDE only; output goes through the LED router.' } })
++            return
++          }
+ 
+           // The armed mode (#238): Save on persists a PBP record (#236); off is a
+           // run-only push. Captured up front so the post-push dirty-gate record lands
+-- 
+2.55.0.windows.3
+

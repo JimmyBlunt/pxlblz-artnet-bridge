@@ -1,0 +1,396 @@
+From b214c2746d08882ed40ea292fa17ad2d37257da9 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 00:44:42 +1000
+Subject: [PATCH 3/8] Extract layout resolution and loop start in Preview
+ (local #9002)
+
+Behaviour-preserving refactor ahead of FastLED Patterns: the main preview
+effect now has two local helpers, resolveActiveLayout(nativeDim) (resolve,
+reflect corrections, publish display/map dims, label, solid eligibility)
+and startLoop(layout, handle, shim, clock, renderCompatibility) (renderer,
+paint/paintPacked wrappers, external pixel output, render loop, cleanup).
+The Pixelblaze path calls them in the same order as before, so a second
+Pattern language can share the renderer and Art-Net output without copies.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+npm run lint, check:e2e-coverage, check:e2e-locators, tsc -b (tsconfig + node),
+vitest Preview + renderLoop (36 passed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/components/Preview.tsx | 328 +++++++++++++++++++------------------
+ 1 file changed, 173 insertions(+), 155 deletions(-)
+
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index b9464e0c..26bbe5e6 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -14,18 +14,18 @@ import {
+ import { seedActiveSettings } from '@/store/settingsCascade'
+ import { useCameraStore } from '@/store/cameraStore'
+ import { createShim, createFxShim, type ShimContext } from '@/engine/shim'
+-import { loadPattern, nativeDimension } from '@/engine/loadPattern'
+-import { selectRenderCompatibility } from '@/engine/renderCompatibility'
++import { loadPattern, nativeDimension, type PatternHandle } from '@/engine/loadPattern'
++import { selectRenderCompatibility, type RenderCompatibility } from '@/engine/renderCompatibility'
+ import { bundle } from '@/engine/bundle'
+ import { compileLibraries } from '@/engine/libraries'
+ import { createExternalPixelOutput } from '@/engine/externalPixelOutput'
+ import { createRenderer } from '@/engine/renderer'
+ import { createRenderLoop, type RenderLoop } from '@/engine/renderLoop'
+-import { createVirtualClock } from '@/engine/virtualClock'
++import { createVirtualClock, type VirtualClock } from '@/engine/virtualClock'
+ import { clampPixelCount, advanceAutoOrbit, type OrbitCamera } from '@/engine/camera'
+ import { cappedPreviewPixelCount } from '@/engine/previewPixelCount'
+ import { layoutSource as buildLayoutSource } from '@/store/mapStore'
+-import { resolveLayout } from '@/engine/layout'
++import { resolveLayout, type ResolvedLayout } from '@/engine/layout'
+ import { resolvePole, type ShapeId } from '@/engine/shapes'
+ import { OrbitControls } from '@/components/OrbitControls'
+ import { LIBRARIES } from '@/pixelblaze/libs'
+@@ -169,6 +169,172 @@ export function Preview({
+     // even rebuilt; nothing here special-cases map mode.
+     if (!previewSource) return
+ 
++    // Resolve the active layout: a 1D Pattern combines mapped/Index `[x]` with a
++    // viewport Shape; a 2D Pattern combines a map with an optional Surface. The pure
++    // helper corrects a stale persisted selection to the dimension's default, and
++    // we reflect any correction back so the "Shape" dropdown stays in sync.
++    const resolveActiveLayout = (nativeDim: 1 | 2 | 3) => {
++      const { userMaps } = useMapStore.getState()
++      // The active map/shape/surface/count already carry any demo recommendation —
++      // the settings cascade seeded them on open (seedActiveSettings). Detail views
++      // may scale the count preview-only, but resolveLayout still needs no separate
++      // recommended* inputs: the seeded selection IS the recommendation when a demo
++      // opens, freely overridable thereafter.
++      // Resolve the full layout in one engine query (src/engine/layout.ts):
++      // selection-correction + map/shape/surface resolution + normalization +
++      // positions + solid-eligible normals + the grid readout. Store-coupled
++      // lookups are injected so the resolver stays engine-pure and table-tested.
++      const layout = resolveLayout(
++        {
++          selection: { mapId: activeMapId, shapeId: activeShapeId, surfaceId: activeSurfaceId },
++          nativeDim,
++          source: buildLayoutSource({ userMaps }),
++          persistedCount: previewPixelCount,
++          normalizeMode: activeNormalizeMode,
++          poleCols: useCameraStore.getState().poleCols,
++          shapeDefaultCount: DEFAULT_SHAPE_PIXEL_COUNT,
++          maxPixelCount: pixelCountCap ?? undefined,
++        },
++        {
++          resolveMap: (mapId) => resolveMap(mapId ?? DEFAULT_MAP_ID, userMaps),
++          defaultCountForDim: defaultPixelCountForDim,
++        },
++      )
++
++      // Reflect any dimension-correction back onto the store so the dropdowns stay
++      // in sync with what was actually drawn.
++      const { correctedSelection } = layout
++      if (correctedSelection.mapId && correctedSelection.mapId !== activeMapId) {
++        useMapStore.getState().setActiveMap(correctedSelection.mapId)
++      }
++      if (correctedSelection.shapeId && correctedSelection.shapeId !== activeShapeId) {
++        useMapStore.getState().setActiveShape(correctedSelection.shapeId as ShapeId)
++      }
++      if (correctedSelection.surfaceId && correctedSelection.surfaceId !== activeSurfaceId) {
++        useMapStore.getState().setActiveSurface(correctedSelection.surfaceId)
++      }
++
++      useEditorStore.getState().setDisplayDim(layout.displayDim)
++      useEditorStore.getState().setMapDim(layout.mapDim)
++      useEditorStore.getState().setLayoutLabel(layout.layoutLabel)
++      // A normal array is fed exactly for a solid-eligible embedding (Pole, Cylinder,
++      // Sphere shell, Cube shell), so its presence IS the eligibility the deck's
++      // solidity slider keys on.
++      useEditorStore.getState().setSolidEligible(layout.draw.kind === '3d' && layout.draw.normals !== null)
++      return layout
++    }
++
++    // Renderer, paint wrappers, external pixel output and the render loop for a
++    // loaded Pattern handle. Returns the effect cleanup.
++    const startLoop = (
++      layout: ResolvedLayout,
++      handle: PatternHandle,
++      shim: ShimContext,
++      clock: VirtualClock,
++      renderCompatibility: RenderCompatibility,
++    ) => {
++      const { mapPoints, pixelCount, draw } = layout
++      const externalPixelOutput =
++        pixelCountCap === null ? createExternalPixelOutput(pixelCount) : null
++      // Split the draw channel back into the prior locals so the renderer wiring
++      // below is unchanged: the 3D channel carries positions + (solid-eligible)
++      // normals; the 2D channel a single pos list.
++      const positions3D = draw.kind === '3d' ? draw.positions : null
++      const normals3D = draw.kind === '3d' ? draw.normals : null
++      const shapePositions = draw.kind === '2d' ? draw.positions : null
++
++      const renderer = createRenderer(canvas, viewport)
++      rendererRef.current = renderer
++      // 3D layout: hand the orbit renderer the cube's [0,1]³ positions, a square
++      // canvas, and a base dot size; seed the camera from the ephemeral store.
++      if (positions3D) {
++        const px = cube3DCanvasPx(viewport.containerWidth, viewport.containerHeight)
++        renderer.set3DPositions(positions3D, { canvasPx: px, normals: normals3D })
++        const view = useCameraStore.getState()
++        renderer.setCamera(view.camera)
++        renderer.setZoom(view.zoom)
++        renderer.setSolidity(useMapStore.getState().activeSolidity)
++        canvas3DPxRef.current = px
++      } else {
++        // Every 2D layout — stock plane, ring/cloud, or a 1D shape embedding — draws
++        // through the single pos channel; the renderer measures extent + neighbour
++        // pitch from these points. An empty array is a valid no-op layout.
++        renderer.set2DPositions(shapePositions ?? [], viewport)
++        canvas3DPxRef.current = null
++      }
++      renderer.setDiffusion(usePreviewStore.getState().diffusion)
++
++      // 3D paint wrapper: push the live camera angle before drawing. The angle is
++      // advanced by an independent rAF (the auto-orbit effect below) so the viewport
++      // spin is decoupled from the pattern's play/pause. Read via getState so it
++      // never churns React.
++      const paint = (pixels: [number, number, number][], brightness: number, dimmed: boolean) => {
++        if (positions3D) {
++          const view = useCameraStore.getState()
++          // A running capture sequence drives the orbit itself (#879) and parks
++          // its camera in a ref so no store write repaints mid-capture.
++          renderer.setCamera(captureCameraRef.current ?? view.camera)
++          renderer.setZoom(view.zoom)
++        }
++        renderer.paint(pixels, brightness, dimmed)
++        // Dev capture: fulfil any pending request with the frame just drawn.
++        captureRef.current.afterPaint(canvasRef.current)
++      }
++
++      const paintPacked = externalPixelOutput?.enabled
++        ? (frame: Float64Array, brightness: number, dimmed: boolean) => {
++            if (positions3D) {
++              const view = useCameraStore.getState()
++              renderer.setCamera(captureCameraRef.current ?? view.camera)
++              renderer.setZoom(view.zoom)
++            }
++            renderer.paint(frame, brightness, dimmed)
++            captureRef.current.afterPaint(canvasRef.current)
++            externalPixelOutput.sendPacked(frame)
++          }
++        : undefined
++
++      const loop = createRenderLoop({
++        handle, shim, clock,
++        mapPoints, pixelCount,
++        renderCompatibility,
++        getSpeed: () => usePreviewStore.getState().speed,
++        getBrightness: () => usePreviewStore.getState().brightness,
++        isDimmed: () => !usePreviewStore.getState().isRunning,
++        paint,
++        paintPacked,
++        onError: (err) => setRuntimeError(err.message),
++        onFps: (fps) => usePreviewStore.getState().setFps(fps),
++        onFrame: (_delta, _builtins, elapsedMs) => {
++          // Telemetry is unconditional (#150): publish elapsed every frame so the
++          // readout's elapsed cell always tracks, independent of variable watching.
++          usePreviewStore.getState().setElapsed(elapsedMs)
++          if (!usePreviewStore.getState().watchPatternVars) return
++          // Watched values live in the pattern's numeric domain (raw int32 in
++          // fidelity mode); decode scalars and array elements to the float UI
++          // domain so the panel reads the same in fast and fidelity modes.
++          // decodeScalar is identity in fast mode.
++          const dec = shim.decodeScalar
++          const values: Record<string, unknown> = {}
++          const exports = handle.getExports()
++          for (const name of useEditorStore.getState().patternVars) {
++            values[name] = snapshotWatchValue(exports[name], dec)
++          }
++          usePreviewStore.getState().setWatchValues(values)
++        },
++      })
++
++      loopRef.current = loop
++      loop.renderPreviewFrame()
++
++      if (usePreviewStore.getState().isRunning) loop.start()
++
++      return () => {
++        loop.stop()
++        externalPixelOutput?.close()
++      }
++    }
++
+     // Bundle first so the Pattern's native dimensionality (highest render fn) is
+     // known before resolving its layout — it drives Recommended/default ordering,
+     // never a map filter.
+@@ -184,69 +350,10 @@ export function Preview({
+     const nativeDim = nativeDimension(metadata.renderFns)
+     useEditorStore.getState().setNativeDim(nativeDim)
+ 
+-    // Resolve the active layout: a 1D Pattern combines mapped/Index `[x]` with a
+-    // viewport Shape; a 2D Pattern combines a map with an optional Surface. The pure
+-    // helper corrects a stale persisted selection to the dimension's default, and
+-    // we reflect any correction back so the "Shape" dropdown stays in sync.
+-    const { userMaps } = useMapStore.getState()
+-    // The active map/shape/surface/count already carry any demo recommendation —
+-    // the settings cascade seeded them on open (seedActiveSettings). Detail views
+-    // may scale the count preview-only, but resolveLayout still needs no separate
+-    // recommended* inputs: the seeded selection IS the recommendation when a demo
+-    // opens, freely overridable thereafter.
+-    // Resolve the full layout in one engine query (src/engine/layout.ts):
+-    // selection-correction + map/shape/surface resolution + normalization +
+-    // positions + solid-eligible normals + the grid readout. Store-coupled
+-    // lookups are injected so the resolver stays engine-pure and table-tested.
+-    const layout = resolveLayout(
+-      {
+-        selection: { mapId: activeMapId, shapeId: activeShapeId, surfaceId: activeSurfaceId },
+-        nativeDim,
+-        source: buildLayoutSource({ userMaps }),
+-        persistedCount: previewPixelCount,
+-        normalizeMode: activeNormalizeMode,
+-        poleCols: useCameraStore.getState().poleCols,
+-        shapeDefaultCount: DEFAULT_SHAPE_PIXEL_COUNT,
+-        maxPixelCount: pixelCountCap ?? undefined,
+-      },
+-      {
+-        resolveMap: (mapId) => resolveMap(mapId ?? DEFAULT_MAP_ID, userMaps),
+-        defaultCountForDim: defaultPixelCountForDim,
+-      },
+-    )
+-
+-    // Reflect any dimension-correction back onto the store so the dropdowns stay
+-    // in sync with what was actually drawn.
+-    const { correctedSelection } = layout
+-    if (correctedSelection.mapId && correctedSelection.mapId !== activeMapId) {
+-      useMapStore.getState().setActiveMap(correctedSelection.mapId)
+-    }
+-    if (correctedSelection.shapeId && correctedSelection.shapeId !== activeShapeId) {
+-      useMapStore.getState().setActiveShape(correctedSelection.shapeId as ShapeId)
+-    }
+-    if (correctedSelection.surfaceId && correctedSelection.surfaceId !== activeSurfaceId) {
+-      useMapStore.getState().setActiveSurface(correctedSelection.surfaceId)
+-    }
+-
+-    const { mapPoints, pixelCount, draw } = layout
+-    const externalPixelOutput =
+-      pixelCountCap === null ? createExternalPixelOutput(pixelCount) : null
++    const layout = resolveActiveLayout(nativeDim)
++    const { mapPoints, pixelCount } = layout
+     const renderCompatibility = selectRenderCompatibility(layout.mapDim, metadata.renderFns)
+-    // Split the draw channel back into the prior locals so the renderer wiring
+-    // below is unchanged: the 3D channel carries positions + (solid-eligible)
+-    // normals; the 2D channel a single pos list.
+-    const positions3D = draw.kind === '3d' ? draw.positions : null
+-    const normals3D = draw.kind === '3d' ? draw.normals : null
+-    const shapePositions = draw.kind === '2d' ? draw.positions : null
+-
+-    useEditorStore.getState().setDisplayDim(layout.displayDim)
+-    useEditorStore.getState().setMapDim(layout.mapDim)
+-    useEditorStore.getState().setLayoutLabel(layout.layoutLabel)
+     useEditorStore.getState().setRenderAdaptation(renderCompatibility.description)
+-    // A normal array is fed exactly for a solid-eligible embedding (Pole, Cylinder,
+-    // Sphere shell, Cube shell), so its presence IS the eligibility the deck's
+-    // solidity slider keys on.
+-    useEditorStore.getState().setSolidEligible(normals3D !== null)
+ 
+     const clock = createVirtualClock()
+     const shimConfig = {
+@@ -307,96 +414,7 @@ export function Preview({
+       return
+     }
+ 
+-    const renderer = createRenderer(canvas, viewport)
+-    rendererRef.current = renderer
+-    // 3D layout: hand the orbit renderer the cube's [0,1]³ positions, a square
+-    // canvas, and a base dot size; seed the camera from the ephemeral store.
+-    if (positions3D) {
+-      const px = cube3DCanvasPx(viewport.containerWidth, viewport.containerHeight)
+-      renderer.set3DPositions(positions3D, { canvasPx: px, normals: normals3D })
+-      const view = useCameraStore.getState()
+-      renderer.setCamera(view.camera)
+-      renderer.setZoom(view.zoom)
+-      renderer.setSolidity(useMapStore.getState().activeSolidity)
+-      canvas3DPxRef.current = px
+-    } else {
+-      // Every 2D layout — stock plane, ring/cloud, or a 1D shape embedding — draws
+-      // through the single pos channel; the renderer measures extent + neighbour
+-      // pitch from these points. An empty array is a valid no-op layout.
+-      renderer.set2DPositions(shapePositions ?? [], viewport)
+-      canvas3DPxRef.current = null
+-    }
+-    renderer.setDiffusion(usePreviewStore.getState().diffusion)
+-
+-    // 3D paint wrapper: push the live camera angle before drawing. The angle is
+-    // advanced by an independent rAF (the auto-orbit effect below) so the viewport
+-    // spin is decoupled from the pattern's play/pause. Read via getState so it
+-    // never churns React.
+-    const paint = (pixels: [number, number, number][], brightness: number, dimmed: boolean) => {
+-      if (positions3D) {
+-        const view = useCameraStore.getState()
+-        // A running capture sequence drives the orbit itself (#879) and parks
+-        // its camera in a ref so no store write repaints mid-capture.
+-        renderer.setCamera(captureCameraRef.current ?? view.camera)
+-        renderer.setZoom(view.zoom)
+-      }
+-      renderer.paint(pixels, brightness, dimmed)
+-      // Dev capture: fulfil any pending request with the frame just drawn.
+-      captureRef.current.afterPaint(canvasRef.current)
+-    }
+-
+-    const paintPacked = externalPixelOutput?.enabled
+-      ? (frame: Float64Array, brightness: number, dimmed: boolean) => {
+-          if (positions3D) {
+-            const view = useCameraStore.getState()
+-            renderer.setCamera(captureCameraRef.current ?? view.camera)
+-            renderer.setZoom(view.zoom)
+-          }
+-          renderer.paint(frame, brightness, dimmed)
+-          captureRef.current.afterPaint(canvasRef.current)
+-          externalPixelOutput.sendPacked(frame)
+-        }
+-      : undefined
+-
+-    const loop = createRenderLoop({
+-      handle, shim, clock,
+-      mapPoints, pixelCount,
+-      renderCompatibility,
+-      getSpeed: () => usePreviewStore.getState().speed,
+-      getBrightness: () => usePreviewStore.getState().brightness,
+-      isDimmed: () => !usePreviewStore.getState().isRunning,
+-      paint,
+-      paintPacked,
+-      onError: (err) => setRuntimeError(err.message),
+-      onFps: (fps) => usePreviewStore.getState().setFps(fps),
+-      onFrame: (_delta, _builtins, elapsedMs) => {
+-        // Telemetry is unconditional (#150): publish elapsed every frame so the
+-        // readout's elapsed cell always tracks, independent of variable watching.
+-        usePreviewStore.getState().setElapsed(elapsedMs)
+-        if (!usePreviewStore.getState().watchPatternVars) return
+-        // Watched values live in the pattern's numeric domain (raw int32 in
+-        // fidelity mode); decode scalars and array elements to the float UI
+-        // domain so the panel reads the same in fast and fidelity modes.
+-        // decodeScalar is identity in fast mode.
+-        const dec = shim.decodeScalar
+-        const values: Record<string, unknown> = {}
+-        const exports = handle.getExports()
+-        for (const name of useEditorStore.getState().patternVars) {
+-          values[name] = snapshotWatchValue(exports[name], dec)
+-        }
+-        usePreviewStore.getState().setWatchValues(values)
+-      },
+-    })
+-
+-    loopRef.current = loop
+-    loop.renderPreviewFrame()
+-
+-    if (usePreviewStore.getState().isRunning) loop.start()
+-
+-    return () => {
+-      loop.stop()
+-      externalPixelOutput?.close()
+-    }
++    return startLoop(layout, handle, shim, clock, renderCompatibility)
+   }, [previewSource, viewportReady, fidelity, libraries, activeMapId, activeShapeId, activeSurfaceId, previewPixelCount, pixelCountCap, activeNormalizeMode, activeDemoName])
+ 
+   // Seed the live working state from the resolved settings cascade on open:
+-- 
+2.55.0.windows.3
+
