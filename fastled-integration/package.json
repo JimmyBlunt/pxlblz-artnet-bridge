@@ -1,0 +1,22 @@
+{
+  "name": "pxlblz-fastled-integration",
+  "private": true,
+  "type": "module",
+  "description": "FastLED sketches -> deterministic wasm32 (zig + binaryen asyncify) for PXLBLZ-IDE",
+  "scripts": {
+    "setup": "node toolchain/setup.mjs",
+    "build": "node toolchain/build.mjs all",
+    "build:lib": "node toolchain/build.mjs lib",
+    "build:native": "node toolchain/build.mjs native",
+    "verify": "node tests/verify.mjs",
+    "test:service": "node tests/service-test.mjs",
+    "service": "node service/server.mjs",
+    "bench": "node tests/bench-all.mjs"
+  },
+  "devDependencies": {
+    "binaryen": "132.0.0"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

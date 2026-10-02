@@ -1,0 +1,11 @@
+# dependencies / toolchain (recreated by: npm run setup)
+node_modules/
+.venv/
+vendor/
+# caches and build outputs (recreated by: npm run build / verify)
+.cache/
+build/
+*.wasm
+*.trace
+# machine-specific paths written by toolchain/setup.mjs
+config.local.json

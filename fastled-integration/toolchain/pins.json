@@ -1,0 +1,9 @@
+{
+  "fastled": {
+    "repo": "https://github.com/FastLED/FastLED.git",
+    "commit": "ec0a0f35efd439a6d12c3ab68e92082869268a07",
+    "version": "3.10.5"
+  },
+  "zig": { "version": "0.16.0", "pypi": "ziglang" },
+  "binaryen": "132.0.0"
+}

@@ -1,0 +1,1 @@
+fastled/src/platforms/shared/mock/esp/32/drivers/rmt5_peripheral_mock.cpp.hpp:351  stub::fl::micros() -> ::micros()  (upstream compile error on Windows/zig host build; ESP32 RMT mock only, not used by reference)

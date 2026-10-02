@@ -1,0 +1,12 @@
+diff --git a/src/platforms/shared/mock/esp/32/drivers/rmt5_peripheral_mock.cpp.hpp b/src/platforms/shared/mock/esp/32/drivers/rmt5_peripheral_mock.cpp.hpp
+--- a/src/platforms/shared/mock/esp/32/drivers/rmt5_peripheral_mock.cpp.hpp
++++ b/src/platforms/shared/mock/esp/32/drivers/rmt5_peripheral_mock.cpp.hpp
+@@ -348,7 +348,7 @@ bool Rmt5PeripheralMockImpl::transmit(void* channel_handle, void* encoder_handle
+     #ifdef ARDUINO
+     record.timestamp_us = fl::micros();
+     #else
+-    record.timestamp_us = stub::fl::micros();
++    record.timestamp_us = ::micros();
+     #endif
+ 
+     mHistory.push_back(record);

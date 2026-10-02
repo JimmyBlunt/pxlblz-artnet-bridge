@@ -1,0 +1,9 @@
+﻿scale8 fb7ba54f375bd367
+qadd8 0a6a903eb621bf83
+qsub8 d962d0ae03675183
+sin8 0f344a003df5aefd
+sin16 7daf363a4f73fa03
+random16 a630a3fe8841fda0
+random8 753e4368a078c6be
+beat8 287facef88bf6755
+beatsin8 939d0376aed91010

@@ -1,0 +1,13 @@
+{
+  "fastledDir": "vendor/fastled",
+  "zig": ".venv/Lib/site-packages/ziglang/zig.exe",
+  "cacheDir": ".cache",
+  "buildDir": "build",
+  "jobs": 3,
+  "service": {
+    "host": "127.0.0.1",
+    "port": 9996,
+    "maxParallel": 2,
+    "origins": ["http://localhost:5174", "http://localhost:5175", "http://127.0.0.1:5174", "http://127.0.0.1:5175"]
+  }
+}
