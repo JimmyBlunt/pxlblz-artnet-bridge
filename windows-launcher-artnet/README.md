@@ -86,6 +86,16 @@ The Studio opens with `?pxout=1&pxoutUrl=ws://127.0.0.1:9980/pixels`.
 `-CheckOnly` checks without starting anything; `-NoOpen` starts services but no browser.
 Status and errors: `%LOCALAPPDATA%\PXLBLZ-IDE-ArtNet\artnet-start-status.txt` plus logs.
 
+## FastLED compile service
+
+If `fastled-integrationserviceserver.mjs` (with `node_modules`, i.e. `npm run setup` done) is
+found, the starter launches it on `127.0.0.1:9996` (log `fastled-service.log`) unless something
+already answers `/health` there, and waits up to 45 s for `/health`. Any failure is only a
+warning in the status file; Pixelblaze Patterns and the Art-Net output start regardless.
+The installer takes `-FastLedIntegrationPath <folder>` (kept on re-install) and writes it to
+`launcher-config.json` as `fastledIntegrationPath`. The IDE side is in
+`fastled-integration/ide/` (patch series + `install-fastled-ide.ps1`).
+
 ## Frame size
 
 Router configs used with the IDE set `input.variable_size: true` (as the Fadecandy

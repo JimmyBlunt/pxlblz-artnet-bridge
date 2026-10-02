@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$RouterBinDirectory,
     # Router config the starter uses. Omitted on a re-install: the previous choice is kept.
     [string]$RouterConfig,
+    # Folder of fastled-integration (FastLED compile service). Omitted: previous choice, else <workspace>astled-integration.
+    [string]$FastLedIntegrationPath,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'PXLBLZ-IDE-ArtNet'),
     [string]$DesktopDirectory = [Environment]::GetFolderPath('Desktop'),
     [switch]$NoShortcut,
@@ -32,6 +34,15 @@ if (-not $PSBoundParameters.ContainsKey('RouterConfig')) {
     if (Test-Path -LiteralPath $launcherConfigPath) {
         $previous = (Get-Content -LiteralPath $launcherConfigPath -Raw | ConvertFrom-Json).routerConfig
         if ($previous) { $RouterConfig = $previous }
+    }
+}
+
+# FastLED compile service location (optional; the starter only warns if it is missing).
+if (-not $PSBoundParameters.ContainsKey('FastLedIntegrationPath')) {
+    $FastLedIntegrationPath = ''
+    if (Test-Path -LiteralPath $launcherConfigPath) {
+        $previousConfig = Get-Content -LiteralPath $launcherConfigPath -Raw | ConvertFrom-Json
+        if ($previousConfig.PSObject.Properties['fastledIntegrationPath']) { $FastLedIntegrationPath = $previousConfig.fastledIntegrationPath }
     }
 }
 
@@ -72,7 +83,7 @@ New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
 foreach ($file in @('Start-PXLBLZ-ArtNet.ps1','Open-Local-IDE.mjs','Restore-IDEWindow.mjs')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $InstallDirectory $file) -Force
 }
-@{version='artnet-v0.3-dev'; workspaceRoot=$workspace; routerConfig=$RouterConfig} | ConvertTo-Json | Set-Content -LiteralPath $launcherConfigPath -Encoding UTF8
+@{version='artnet-v0.3-dev'; workspaceRoot=$workspace; routerConfig=$RouterConfig; fastledIntegrationPath=$FastLedIntegrationPath} | ConvertTo-Json | Set-Content -LiteralPath $launcherConfigPath -Encoding UTF8
 if (-not $NoShortcut) {
     # Desktop and Start menu: the starter (visible progress window, closes itself
     # on success, stays open with the error otherwise) and the configuration page.

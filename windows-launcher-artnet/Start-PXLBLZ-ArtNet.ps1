@@ -120,6 +120,40 @@ try {
     if ($pageOk) { Note 'OK: Einstellungsseite http://127.0.0.1:9988/' }
     else { Note 'WARNUNG: Einstellungsseite http://127.0.0.1:9988/ antwortet nicht vom Router (Port von einem anderen Programm belegt?). Die Ausgabe laeuft trotzdem.' }
 
+    # FastLED compile service (fastled-integration): compiles FastLED Patterns for the IDE preview.
+    # Optional - a failure is a warning only; Pixelblaze Patterns and the Art-Net output keep working.
+    # launcher-config.json "fastledIntegrationPath"; default <workspace>astled-integration, else <workspace>astled-work.
+    $fastledDir = if ($launcherConfig.PSObject.Properties['fastledIntegrationPath'] -and $launcherConfig.fastledIntegrationPath) { $launcherConfig.fastledIntegrationPath } else { Join-Path $root 'fastled-integration' }
+    if (-not ($launcherConfig.PSObject.Properties['fastledIntegrationPath'] -and $launcherConfig.fastledIntegrationPath) -and -not (Test-Path -LiteralPath $fastledDir) -and (Test-Path -LiteralPath (Join-Path $root 'fastled-work'))) { $fastledDir = Join-Path $root 'fastled-work' }
+    $fastledPort = 9996
+    $fastledHealthy = {
+        try { $h = Invoke-RestMethod "http://127.0.0.1:$fastledPort/health" -TimeoutSec 3; return [bool]($h.ok -and $h.abiVersion) } catch { return $false }
+    }
+    try {
+        if (Listener $fastledPort) {
+            if (& $fastledHealthy) { Note "OK: FastLED-Compiler laeuft bereits (Port $fastledPort)" }
+            else { Note "WARNUNG: Port $fastledPort ist belegt, antwortet aber nicht als FastLED-Compiler. Es wurde kein Prozess beendet." }
+        } elseif ($CheckOnly) {
+            Note "WARNUNG: FastLED-Compiler auf Port $fastledPort ist nicht gestartet (FastLED Patterns kompilieren nicht)."
+        } else {
+            $fastledServer = Join-Path $fastledDir 'service\server.mjs'
+            if (-not (Test-Path -LiteralPath $fastledServer)) { throw "server.mjs fehlt in $fastledDir (launcher-config.json: fastledIntegrationPath)" }
+            if (-not (Test-Path -LiteralPath (Join-Path $fastledDir 'node_modules'))) { throw "node_modules fehlt in $fastledDir (dort einmal: npm run setup)" }
+            $fastledProcess = Start-Process -FilePath $node -ArgumentList ('"' + $fastledServer + '" --port ' + $fastledPort) -WorkingDirectory $fastledDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'fastled-service.log') -RedirectStandardError (Join-Path $logDir 'fastled-service-error.log') -PassThru
+            $deadline = (Get-Date).AddSeconds(45)
+            $ready = $false
+            do {
+                Start-Sleep -Milliseconds 500
+                if ($fastledProcess.HasExited) { throw "FastLED-Compiler wurde beendet. Details: $logDir\fastled-service-error.log" }
+                $ready = & $fastledHealthy
+            } while (-not $ready -and (Get-Date) -lt $deadline)
+            if (-not $ready) { throw "FastLED-Compiler antwortet nicht auf http://127.0.0.1:$fastledPort/health (Log: $logDir\fastled-service.log)" }
+            Note "OK: FastLED-Compiler gestartet (Port $fastledPort, $fastledDir)"
+        }
+    } catch {
+        Note ('WARNUNG: FastLED-Compiler nicht verfuegbar - ' + $_.Exception.Message + '. FastLED Patterns zeigen einen Hinweis; alles andere laeuft.')
+    }
+
     $loginHelper = Join-Path $logDir 'Open-Local-IDE.mjs'
     if ($CheckOnly -or $NoOpen) {
         & $node $loginHelper $main --check
