@@ -1,0 +1,102 @@
+From 305b2405baeb45159c5303966ee6d13b3019aa1a Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 21:30:25 +1000
+Subject: [PATCH 11/12] FastLED preview: no cached compiler OOM, no compile for
+ a stale map size (local #9002)
+
+- fastledStore: a failure of the compile machine itself (out of memory,
+  bad_alloc, compiler could not start) is shown but not cached, so the next
+  open compiles again (seen live: "LLVM ERROR: out of memory" on this PC).
+- Preview: the FastLED compile request waits 60 ms, so opening a Pattern or
+  catalogue example whose settings seed a new pixel count compiles once for
+  the final size instead of also for the previous one.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+eslint changed files, vitest fastledStore (11 passed) + Preview (5 passed);
+no e2e/locator changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/components/Preview.tsx     |  6 +++++-
+ src/store/fastledStore.test.ts | 14 ++++++++++++++
+ src/store/fastledStore.ts      | 11 ++++++++++-
+ 3 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index 11e75af9..0d25d48a 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -377,7 +377,10 @@ export function Preview({
+       if (!artifact) {
+         const notice = fastled.serviceStatus === 'offline' ? 'offline' : 'compiling'
+         queueMicrotask(() => setFastLedNotice(notice))
+-        fastled.requestCompile(previewSource, defines, { immediate: true })
++        // Opening a Pattern or example re-resolves the layout right after (its
++        // settings seed the pixel count); a short delay lets that superseding
++        // run cancel this request instead of compiling for a stale size.
++        const compileTimer = setTimeout(() => fastled.requestCompile(previewSource, defines, { immediate: true }), 60)
+         // Nothing runs until it compiled: drop the previous Pattern's Controls.
+         handleRef.current = null
+         useEditorStore.getState().setPatternVars([])
+@@ -389,6 +392,7 @@ export function Preview({
+           else setFastLedNotice(state.serviceStatus === 'offline' ? 'offline' : 'compiling')
+         })
+         return () => {
++          clearTimeout(compileTimer)
+           unsubscribe()
+           queueMicrotask(() => setFastLedNotice(null))
+         }
+diff --git a/src/store/fastledStore.test.ts b/src/store/fastledStore.test.ts
+index a53ad90c..aae2ffc9 100644
+--- a/src/store/fastledStore.test.ts
++++ b/src/store/fastledStore.test.ts
+@@ -166,3 +166,17 @@ describe('fastledStore with read-only FastLED examples', () => {
+     expect(useFastLedStore.getState().diagnosticsSource).toBeNull()
+   })
+ })
++
++describe('fastledStore transient compile failures', () => {
++  it('does not cache an out-of-memory failure of the compiler', async () => {
++    compileMock.mockResolvedValueOnce({ ok: false, message: 'oom', diagnostics: [{ line: 1, column: 1, severity: 'error', message: 'LLVM ERROR: out of memory | Buffer allocation failed' }] })
++    openBuffer(GOOD, GOOD)
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    expect(useFastLedStore.getState().getArtifact(GOOD, DEFINES)).toBeUndefined()
++    compileMock.mockResolvedValueOnce(ok())
++    useFastLedStore.getState().requestCompile(GOOD, DEFINES, { immediate: true })
++    await __settleFastLedCompilesForTests()
++    expect(useFastLedStore.getState().getArtifact(GOOD, DEFINES)?.ok).toBe(true)
++  })
++})
+diff --git a/src/store/fastledStore.ts b/src/store/fastledStore.ts
+index a97f2030..02ce5353 100644
+--- a/src/store/fastledStore.ts
++++ b/src/store/fastledStore.ts
+@@ -114,6 +114,12 @@ function applyResult(source: string, artifact: FastLedArtifact, requestedFor: st
+   }
+ }
+ 
++const TRANSIENT_FAILURE = /out ?of ?memory|bad_alloc|failed to spawn|SystemResources|Buffer allocation failed|ENOMEM/i
++
++export function isTransientCompileFailure(diagnostics: readonly FastLedDiagnostic[]): boolean {
++  return diagnostics.some((d) => d.severity === 'error' && TRANSIENT_FAILURE.test(d.message))
++}
++
+ function stillWanted(source: string): boolean {
+   const editor = useEditorStore.getState()
+   return editor.source === source || editor.previewSource === source
+@@ -163,7 +169,10 @@ function runCompile(source: string, defines: FastLedDefines, isEdit: boolean): v
+       } else {
+         artifact = { ok: false, message: result.message, diagnostics: result.diagnostics }
+       }
+-      cache.set(source, defines, artifact)
++      // A failure of the compile machine itself (out of memory, compiler could
++      // not start) is not a property of the source: show it, but do not cache
++      // it, so the next request compiles again.
++      if (artifact.ok || !isTransientCompileFailure(artifact.diagnostics)) cache.set(source, defines, artifact)
+       applyResult(source, artifact, requestedFor)
+     } catch (err) {
+       useFastLedStore.setState((s) => ({ compilingSource: s.compilingSource === source ? null : s.compilingSource }))
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,68 @@
+From ee9bed4060824b9e41d902d697df5ff189c8462b Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Sat, 3 Oct 2026 21:31:16 +1000
+Subject: [PATCH 12/12] Document FastLED examples, supporting files and the
+ worker (local #9002)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- CONTEXT.md: FastLED Pattern supporting files; new term "FastLED example"
+  (read-only built-in, fastled:<id>, Clone into a FastLED Pattern).
+- Technical Reference §10a: multi-file sections and compile request,
+  example catalogue (vendoring, sync script, lazy loading, rail folder,
+  read-only open, Clone), worker pipeline + watchdog with measurements,
+  updated limits.
+
+Pre-commit hook checks run manually (hook cannot spawn npx.cmd on Windows/Node 24):
+vitest src/docs (6 passed); docs only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CONTEXT.md                                   | 6 +++++-
+ docs/reference/PXLBLZ Technical Reference.md | 9 ++++++---
+ 2 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/CONTEXT.md b/CONTEXT.md
+index e58131d7..8ca93b8f 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -17,9 +17,13 @@ A source file in Pixelblaze's JavaScript-derived language that runs on a control
+ _Avoid_: program (the websocket API's term), sketch, script.
+ 
+ **FastLED Pattern** (local fork):
+-A **Pattern** written in C++ against the FastLED library instead of the Pixelblaze language, marked by the first-line directive `// @pxlblz-language fastled` (optional `// @pxlblz-dim 1|2|3` and `// @pxlblz-output wire|leds`). The marker rides in `src`, so storage, autosave and navigation treat it like any Pattern. PXLBLZ-IDE compiles it through the **FastLED compile service** to wasm and previews real FastLED in the browser; with external pixel output on, its exact wire bytes go to the LED router (Art-Net/Fadecandy). It is never sent to a **Controller**, never part of a **Show**, never bundled into an artifact, and the agent does not discover it. Its FastLED `UISlider`/`UICheckbox`/`UINumberField` elements are its **Controls**, persisted per Pattern by UI name.
++A **Pattern** written in C++ against the FastLED library instead of the Pixelblaze language, marked by the first-line directive `// @pxlblz-language fastled` (optional `// @pxlblz-dim 1|2|3` and `// @pxlblz-output wire|leds`). The marker rides in `src`, so storage, autosave and navigation treat it like any Pattern. PXLBLZ-IDE compiles it through the **FastLED compile service** to wasm and previews real FastLED in the browser; with external pixel output on, its exact wire bytes go to the LED router (Art-Net/Fadecandy). It is never sent to a **Controller**, never part of a **Show**, never bundled into an artifact, and the agent does not discover it. Its FastLED `UISlider`/`UICheckbox`/`UINumberField` elements are its **Controls**, persisted per Pattern by UI name. It may hold supporting files (`.h`, `.cpp`, further `.ino`), kept in the same `src` as `// @pxlblz-file <path>` sections and edited as file tabs.
+ _Avoid_: sketch (FastLED's own word) in UI and docs; calling the LED router a Controller.
+ 
++**FastLED example** (local fork):
++One of the official FastLED examples in the read-only built-in "FastLED" folder of the Patterns rail (vendored catalogue, built-in key `fastled:<id>`). It opens read-only like a stock demo and **Clone** turns it into a personal **FastLED Pattern**. Examples marked hardware (ESP32 drivers, audio input, …) stay listed with their note and may not compile or show anything on the PC.
++_Avoid_: demo sketch; calling it a stock Pattern (stock Patterns are Pixelblaze).
++
+ **FastLED compile service**:
+ The local helper (`fastled-integration/service/server.mjs`, default `http://127.0.0.1:9996`) that turns FastLED Pattern source plus defines (`PXLBLZ_NUM_LEDS` = the map's pixel count) into a wasm module and compiler diagnostics. Started by the Art-Net launcher; when it is not reachable the preview says so and the editor keeps saving.
+ 
+diff --git a/docs/reference/PXLBLZ Technical Reference.md b/docs/reference/PXLBLZ Technical Reference.md
+index c00b8d5f..ba8619e5 100644
+--- a/docs/reference/PXLBLZ Technical Reference.md	
++++ b/docs/reference/PXLBLZ Technical Reference.md	
+@@ -439,10 +439,13 @@ readouts share the same snapshots.
+ 
+ A FastLED Pattern is detected by `patternLanguage(src)` (`src/engine/patternLanguage.ts`): the leading comment block (at most 20 lines) carries `// @pxlblz-language fastled`. No schema change; `isFastLedSource` guards every Pixelblaze-only path (Send to Controller gate and push, saved-artifact reconciliation, saved-program matching, Show pickers and `compileShowForPreview` / v2 stage preparation via `showFastLedGuard.ts`, agent discovery, Copy/.epe).
+ 
+-- Compile: `fastledStore` posts `{source, defines}` to the FastLED compile service (`fastledCompileClient.ts`, override `?fastledService=`), caches `WebAssembly.Module`s per (source, defines) and publishes `previewSource` only after a successful compile of the still-current buffer of the same Pattern; errors set `compileStatus` broken and become Monaco markers (owner `fastled`). Offline: `serviceStatus` offline, retry with backoff, `compileStatus` untouched.
+-- Preview: `Preview.tsx` resolves the layout with the `@pxlblz-dim` dimension, passes `PXLBLZ_NUM_LEDS` (and `PXLBLZ_WIDTH/HEIGHT` for regular grids), instantiates the vendored host (`src/engine/fastled/fastledWasmHost.ts`, ABI 1) and drives `createFastLedPatternHandle` through the shared `startLoop` (fast shim always). `beforeRender(dt)` runs `frame(dt)`; `render*(i)` emits byte/255 of L2 wire bytes (default, RGB order after brightness/correction/dither) or L1 `leds[]`. byte/255 → `Math.round(v*255)` is exact, so the packed frame and the router receive FastLED's bytes (golden test: 0 differing bytes against the native FastLED reference).
++- Compile: `fastledStore` posts `{source, defines, files?, options.fileName?}` to the FastLED compile service (`fastledCompileClient.ts`, override `?fastledService=`), caches `WebAssembly.Module`s per (source, defines) and publishes `previewSource` only after a successful compile of the still-current buffer of the same Pattern; errors set `compileStatus` broken and become Monaco markers (owner `fastled`). Offline: `serviceStatus` offline, retry with backoff, `compileStatus` untouched.
++- Supporting files (multi-file Patterns): `.h/.cpp/.ino/...` files ride in the same `src` as whole-line `// @pxlblz-file <path>` sections after the sketch (`fastledFiles.ts`; exact round trip, so save/autosave/clone/D1 need no change). Paths follow the compile service's sketch-folder model (subfolders, no `..`; every `.c/.cpp` is its own translation unit, extra `.ino` tabs are appended). The compile client sends the sketch as `source` and the sections as `files`; `// @pxlblz-main X.ino` names the sketch (`options.fileName`). Diagnostics keep their `file`; the Editor shows file tabs for FastLED Patterns only (one Monaco model per file, markers and error counts per file, add/rename/remove when editable).
++- Example catalogue: all official FastLED examples are vendored read-only under `src/engine/fastled/catalog/` (`fastled-examples.json` schema 1 + verbatim files, sha256-checked, `-text` in `.gitattributes`; refresh with `node scripts/sync-fastled-catalog.mjs <engine catalog dir>`). Index and files load lazily (`fastledCatalogLoader.ts`, `fastledCatalogStore`). The Patterns rail shows a "FastLED" built-in folder with catalogue categories; hardware-only examples carry an "HW" badge with the catalogue's German note. An example opens read-only under the built-in key `fastled:<id>` in the stock-demo slot (`activeDemoName`), so routes, per-demo settings and Clone are shared with stock demos; its source is a header (marker, dim, main file, provenance, hardware note) plus the verbatim files, and the recommended pixel count is the example's LED count. Clone copies exactly that source into a personal FastLED Pattern.
++- Preview: `Preview.tsx` resolves the layout with the `@pxlblz-dim` dimension, passes `PXLBLZ_NUM_LEDS` (and `PXLBLZ_WIDTH/HEIGHT` for regular grids), runs the vendored host (`src/engine/fastled/fastledWasmHost.ts`, ABI 1) in a Web Worker (`fastled.worker.ts` → `fastledWorkerCore.ts`, main side `FastLedWorkerHost`, `?fastledWorker=0` = main thread) and drives `createFastLedPatternHandle` through the shared `startLoop` (fast shim always). `beforeRender(dt)` runs `frame(dt)`; `render*(i)` emits byte/255 of L2 wire bytes (default, RGB order after brightness/correction/dither) or L1 `leds[]`. byte/255 → `Math.round(v*255)` is exact, so the packed frame and the router receive FastLED's bytes (golden test: 0 differing bytes against the native FastLED reference).
+ - Controls: FastLED UI elements map to ranged slider/toggle Controls (`PatternMetadata.controls[].range`); values persist in `PatternRecord.controls` (`controls_json`) keyed by UI name.
+-- Limits: main-thread wasm; the host's loop/show budget catches runaway loops that call `millis/delay/show`, but a pure `while(true){}` still freezes the tab. Playlists (sequencing Pixelblaze and FastLED Patterns with cuts/crossfades) are a planned follow-up.
++- Worker and watchdog: the worker runs the same host calls in the same order, so bytes are identical; frames are pipelined by one IDE frame (frame(dt_k) requests frame k while frame k-1 is shown; a late answer repeats the last frame and the deltas accumulate). No answer within 2 s (setup 10 s) terminates the worker: runtime error, last frame kept. The host's loop/show budget still reports runaway loops that call `millis/delay/show` (they keep running). Measured at 4,593 LEDs: ~1 ms per frame in the worker, ~1.4 ms round trip, main-thread cost ~0.1 ms per frame; added latency one IDE frame.
++- Limits: catalogue examples use the stock layouts (square grids match their XY size; ring/free screen-map geometry is not yet a preview map). Compiler failures caused by the machine (out of memory) are not cached. Playlists (sequencing Pixelblaze and FastLED Patterns with cuts/crossfades) are a planned follow-up.
+ 
+ # Part 3 — Maps and spatial presentation
+ 
+-- 
+2.55.0.windows.3
+
