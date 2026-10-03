@@ -99,6 +99,7 @@ function Set-Busy([bool]$busy) {
 function Invoke-Component([string]$key, [string]$action) {
     $out = [IO.Path]::GetTempFileName()
     $p = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $componentScript + '"'), '-Component', $key, '-Action', $action) -WindowStyle Hidden -RedirectStandardOutput $out -PassThru
+    $null = $p.Handle   # Windows PowerShell 5.1 only keeps ExitCode if the handle was opened while running
     while (-not $p.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
     $p.WaitForExit()
     $lines = @(Get-Content -LiteralPath $out -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_.Trim() })
