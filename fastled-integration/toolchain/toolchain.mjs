@@ -35,7 +35,16 @@ export function commonFlags(cfg) {
     '-I' + path.join(ROOT, 'toolchain', 'override'),
     '-isystem', path.join(cfg.fastledDir, 'src'),
     '-include', path.join(ROOT, 'toolchain', 'pxl_prelude.h'),
+    // Content hash of the override headers + prelude: zig's compile cache does not notice a NEW
+    // header that shadows an upstream one (its manifest lists the previously resolved files),
+    // so any override change must change the command line.
+    '-DPXL_OVERRIDE_REV=0x' + overrideRev(),
   ];
+}
+let _overrideRev;
+function overrideRev() {
+  if (!_overrideRev) _overrideRev = sha(dirHash(path.join(ROOT, 'toolchain', 'override')) + fs.readFileSync(path.join(ROOT, 'toolchain', 'pxl_prelude.h'))).slice(0, 12);
+  return _overrideRev;
 }
 export const TARGETS = {
   wasm: { triple: 'wasm32-wasi', extra: ['-U__wasm__'] },
@@ -65,7 +74,10 @@ export function zigEnv(cfg) {
 export function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     const t0 = performance.now();
-    const p = spawn(cmd, args, { env: opts.env, cwd: opts.cwd, windowsHide: true });
+    let p;
+    try { p = spawn(cmd, args, { env: opts.env, cwd: opts.cwd, windowsHide: true }); } catch (e) {
+      resolve({ code: -1, out: '', err: String(e), ms: performance.now() - t0 }); return;  // e.g. spawn ENOMEM
+    }
     let out = '', err = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
@@ -121,11 +133,51 @@ export function libKey(cfg, target) {
     tool: dirHash(path.join(ROOT, 'toolchain', 'override')) + dirHash(path.join(ROOT, 'toolchain', 'include')) +
       sha(fs.readFileSync(path.join(ROOT, 'toolchain', 'pxl_prelude.h'))),
     runtime: sha(fs.readFileSync(path.join(ROOT, 'runtime', 'pxl_runtime.cpp'))) +
-      sha(fs.readFileSync(path.join(ROOT, 'native', 'fiber_win.cpp'))) + sha(fs.readFileSync(path.join(ROOT, 'native', 'harness.cpp'))),
+      sha(fs.readFileSync(path.join(ROOT, 'native', 'fiber_win.cpp'))) + sha(fs.readFileSync(path.join(ROOT, 'native', 'harness.cpp'))) +
+      (target === 'native' ? sha(fs.readFileSync(path.join(ROOT, 'native', 'libm_ref.zig'))) + sha(NATIVE_LIBM_MUSL.join(',')) : ''),
   })).slice(0, 16);
 }
 
 export function libDir(cfg, target) { return path.join(cfg.buildDir, target); }
+
+// ------------------------------------------------------------------ native libm alignment
+// The wasm32-wasi build takes libm from zig's bundled wasi-libc: musl C sources (asinf, atan2,
+// pow, sinh, expm1, log1p, ...) plus zig's own std.math based functions (acos, atan, cbrt,
+// cosh, tanh, hypot, ...); sin/cos/exp/log/sqrt/fmod/floor come from compiler_rt on both
+// targets. The x86_64-windows-gnu reference would use mingw-w64's implementations, which differ
+// in the last ulp (e.g. Animartrix: 3 differing L1 bytes in 600 frames). To compare the engine
+// and not two libms, the native reference links the very same musl sources (wasi variants where
+// zig ships one) and native/libm_ref.zig (mirror of zig's lib/c/math.zig). The wasm build is unchanged.
+export const NATIVE_LIBM_MUSL = [
+  'asinf', 'atan2', 'atan2f', 'pow', 'pow_data', 'powf', 'powf_data', 'exp_data', 'exp2f_data',
+  'sinh', 'sinhf', '__expo2', '__expo2f', 'expm1', 'expm1f', 'log1p', 'log1pf',
+  'asinh', 'asinhf', 'atanh', 'atanhf', 'acosh', 'erf', 'erff', 'tgamma', 'tgammaf',
+  'lgamma', 'lgamma_r', 'lgammaf', 'lgammaf_r', 'signgam', '__sin', '__cos', '__sindf', '__cosdf',
+  '__math_divzero', '__math_divzerof', '__math_invalid', '__math_invalidf', '__math_oflow', '__math_oflowf',
+  '__math_uflow', '__math_uflowf', '__math_xflow', '__math_xflowf',
+];
+export function nativeLibmJobs(cfg, dir) {
+  const zigLib = path.join(path.dirname(cfg.zig), 'lib');
+  const L = path.join(zigLib, 'libc');
+  const wasiMath = path.join(L, 'wasi', 'libc-top-half', 'musl', 'src', 'math');
+  const muslMath = path.join(L, 'musl', 'src', 'math');
+  const cflags = ['cc', '-target', TARGETS.native.triple, ...TARGETS.native.extra, '-O2', '-ffp-contract=off', '-std=c99', '-nostdinc',
+    '-D_XOPEN_SOURCE=700', '-w',
+    // wasi-libc's patched internal headers first (WANT_ROUNDING 0, 1-arg __expo2), like zig's wasi build
+    '-I' + path.join(L, 'wasi', 'libc-top-half', 'musl', 'src', 'include'), '-I' + path.join(L, 'musl', 'src', 'include'),
+    '-I' + path.join(L, 'wasi', 'libc-top-half', 'musl', 'src', 'internal'), '-I' + path.join(L, 'musl', 'src', 'internal'),
+    '-I' + path.join(L, 'wasi', 'libc-top-half', 'musl', 'arch', 'wasm32'),
+    '-isystem', path.join(L, 'include', 'wasm-wasi-musl'), '-isystem', path.join(L, 'include', 'generic-musl')];
+  const jobs = NATIVE_LIBM_MUSL.map((n) => {
+    const src = fs.existsSync(path.join(wasiMath, n + '.c')) ? path.join(wasiMath, n + '.c') : path.join(muslMath, n + '.c');
+    return { src, obj: path.join(dir, 'libm', n + '.o'), name: 'libm:' + n, args: [...cflags, '-c', src, '-o', path.join(dir, 'libm', n + '.o')] };
+  });
+  const zsrc = path.join(ROOT, 'native', 'libm_ref.zig');
+  const zobj = path.join(dir, 'libm', 'libm_ref.o');
+  jobs.push({ src: zsrc, obj: zobj, name: 'libm:zig', args: ['build-obj', zsrc, '-target', TARGETS.native.triple, '-mcpu', 'baseline',
+    '-O', 'ReleaseFast', '-fno-emit-h', '-femit-bin=' + zobj] });
+  return jobs;
+}
 
 // Builds (once, cached) the FastLED archive + runtime object for a target.
 export async function buildLib(cfg, target, { log = console.log, force = false } = {}) {
@@ -136,7 +188,9 @@ export async function buildLib(cfg, target, { log = console.log, force = false }
   const stampFile = path.join(dir, 'stamp.json');
   const archive = path.join(dir, 'libfastled.a');
   const runtimeObj = path.join(dir, 'pxl_runtime.o');
-  const extraObjs = target === 'native' ? [path.join(dir, 'fiber_win.o'), path.join(dir, 'harness.o')] : [];
+  const libmJobs = target === 'native' ? nativeLibmJobs(cfg, dir) : [];
+  if (libmJobs.length) fs.mkdirSync(path.join(dir, 'libm'), { recursive: true });
+  const extraObjs = target === 'native' ? [path.join(dir, 'fiber_win.o'), path.join(dir, 'harness.o'), ...libmJobs.map((j) => j.obj)] : [];
   const pch = path.join(dir, 'pxl_sketch_fastled.pch');
   let stamp = {};
   try { stamp = JSON.parse(fs.readFileSync(stampFile, 'utf8')); } catch {}
@@ -154,10 +208,11 @@ export async function buildLib(cfg, target, { log = console.log, force = false }
   if (target === 'native') {
     jobs.push({ src: path.join(ROOT, 'native', 'fiber_win.cpp'), obj: extraObjs[0], name: 'fiber_win', plain: true });
     jobs.push({ src: path.join(ROOT, 'native', 'harness.cpp'), obj: extraObjs[1], name: 'harness', plain: true });
+    jobs.push(...libmJobs);
   }
   log(`[${target}] compiling ${jobs.length} units (key ${key}, ${cfg.jobs} parallel) ...`);
   const results = await pool(jobs, cfg.jobs, async (j) => {
-    const args = j.plain ? ['c++', '-target', TARGETS[target].triple, ...TARGETS[target].extra, '-O2', '-c', j.src, '-o', j.obj]
+    const args = j.args ? j.args : j.plain ? ['c++', '-target', TARGETS[target].triple, ...TARGETS[target].extra, '-O2', '-c', j.src, '-o', j.obj]
       : j.pch ? ['c++', ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-x', 'c++-header', j.src, '-o', j.obj]
       : ['c++', ...flags, '-w', '-c', j.src, '-o', j.obj];
     const r = await run(cfg.zig, args, { env });
@@ -167,7 +222,7 @@ export async function buildLib(cfg, target, { log = console.log, force = false }
   });
   if (results.some((r) => r.code !== 0)) throw new Error(`[${target}] library build failed`);
   if (fs.existsSync(archive)) fs.rmSync(archive);
-  const unitObjs = jobs.filter((j) => !['pxl_runtime', 'fiber_win', 'harness', 'pch'].includes(j.name)).map((j) => j.obj);
+  const unitObjs = jobs.filter((j) => !['pxl_runtime', 'fiber_win', 'harness', 'pch'].includes(j.name) && !j.args).map((j) => j.obj);
   const ar = await run(cfg.zig, ['ar', 'rcs', archive, ...unitObjs], { env });
   if (ar.code !== 0) throw new Error('zig ar failed: ' + ar.err);
   const ms = performance.now() - t0;
@@ -228,15 +283,24 @@ export function preprocessSketch(source, fileName = 'sketch.ino') {
 }
 
 // ------------------------------------------------------------------ diagnostics
-export function parseDiagnostics(stderr, fileName = 'sketch.ino', extraNames = []) {
+export function parseDiagnostics(stderr, fileName = 'sketch.ino', extraNames = [], sketchDir = null) {
   const diags = [];
   const re = /^(.*?):(\d+):(\d+): (fatal error|error|warning|note): (.*)$/;
+  const dirNorm = sketchDir ? path.resolve(sketchDir).replace(/\\/g, '/').toLowerCase() + '/' : null;
+  const extra = new Set(extraNames);
   for (const line of stderr.split(/\r?\n/)) {
     const m = re.exec(line);
     if (!m) continue;
     const file = m[1].replace(/\\/g, '/');
     const base = file.split('/').pop();
-    const own = file === fileName || file.endsWith('/' + fileName) ? fileName : (extraNames.includes(base) ? base : null);
+    // path relative to the sketch folder (the compiler prints relative or absolute paths)
+    let rel = null;
+    if (dirNorm && file.toLowerCase().startsWith(dirNorm)) rel = file.slice(dirNorm.length);
+    else if (!/^([a-zA-Z]:)?\//.test(file)) rel = file.replace(/^\.\//, '');
+    let own = null;
+    if (file === fileName || file.endsWith('/' + fileName) || rel === fileName) own = fileName;
+    else if (rel && extra.has(rel)) own = rel;          // incl. secondary .ino tabs (#line "<name>")
+    else if (extra.has(base)) own = base;
     const inSketch = !!own;
     diags.push({
       file: own || file.replace(/^.*?\/(src|override|include)\//, '$1/'),
@@ -309,14 +373,32 @@ export function sketchKey(cfg, target, source, defines, options = {}, files = {}
   return sha(JSON.stringify({ lib: libKey(cfg, target), source, defines: defines || {}, files, p: options.autoPrototypes !== false, o: options.optimize || 'fast', n: options.fileName || '' })).slice(0, 24);
 }
 
-// Compiles + links a sketch. Returns { ok, wasm|exe, diagnostics, timings, key, cached }.
-// files: additional sketch-folder files { 'name.h': text, 'other.cpp': text } (.cpp/.c are compiled and linked too).
-export async function compileSketch(cfg, { source, defines = {}, files = {}, target = 'wasm', options = {}, signal, outName, extraSources = [] }) {
+// Sketch-folder file model (documented in README.md, "Mehrdatei-Sketches"):
+//   * paths are relative to the sketch folder, '/'-separated, subfolders allowed
+//     (e.g. "src/wave.cpp", "shared/color.h"); no '..', no absolute paths, no hidden files;
+//   * every *.c / *.cpp / *.cc anywhere in the folder is its own translation unit
+//     (PlatformIO semantics, a superset of the Arduino IDE which compiles the root and src/);
+//   * further *.ino / *.pde files are concatenated after the main sketch in alphabetical
+//     order (Arduino IDE semantics), each with its own #line marker;
+//   * headers and data files (*.h, *.hpp, *.inc, *.json, *.txt, *.csv) are written next to
+//     the sketch so that #include "..." resolves relative to the including file; the sketch
+//     folder is also on the include path (-I).
+export const SKETCH_FILE_RE = /^(?:[\w.+\- ]+\/)*[\w.+\- ]+\.(h|hh|hpp|hxx|inc|ipp|tpp|c|cpp|cc|cxx|ino|pde|json|txt|csv)$/;
+export function validateSketchFiles(files) {
   for (const name of Object.keys(files)) {
-    if (!/^[\w.-]+\.(h|hpp|hh|inc|c|cpp|cc)$/.test(name) || name.startsWith('.') || name === 'sketch.ino.cpp') {
-      throw new Error(`invalid sketch file name: ${name}`);
-    }
+    const bad = !SKETCH_FILE_RE.test(name) || name.split('/').some((seg) => seg === '' || seg === '.' || seg === '..' || seg.startsWith('.')) ||
+      name === 'sketch.ino.cpp' || name.startsWith('obj/') || name.length > 200;
+    if (bad) throw new Error(`invalid sketch file name: ${name}`);
+    if (typeof files[name] !== 'string') throw new Error(`sketch file ${name}: content must be a string`);
   }
+}
+const isTU = (name) => /\.(c|cpp|cc|cxx)$/.test(name);
+const isIno = (name) => /\.(ino|pde)$/.test(name);
+
+// Compiles + links a sketch. Returns { ok, wasm|exe, diagnostics, timings, key, cached }.
+// files: additional sketch-folder files { 'name.h': text, 'src/other.cpp': text } (see the file model above).
+export async function compileSketch(cfg, { source, defines = {}, files = {}, target = 'wasm', options = {}, signal, outName, extraSources = [] }) {
+  validateSketchFiles(files);
   const t0 = performance.now();
   const lib = await buildLib(cfg, target, { log: options.log || (() => {}) });
   const key = sketchKey(cfg, target, source, defines, options, files);
@@ -329,25 +411,38 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
   }
   fs.mkdirSync(dir, { recursive: true });
   const fileName = options.fileName || 'sketch.ino';
-  const pre = options.autoPrototypes === false ? { code: `#line 1 "${fileName}"\n${source}\n`, prototypes: [] } : preprocessSketch(source, fileName);
+  // Arduino: secondary .ino tabs are appended to the main sketch (alphabetical order).
+  const inoNames = Object.keys(files).filter(isIno).filter((n) => n !== fileName).sort();
+  let fullSource = source;
+  for (const n of inoNames) fullSource += `\n#line 1 "${n}"\n` + files[n].replace(/\r\n?/g, '\n') + '\n';
+  const pre = options.autoPrototypes === false ? { code: `#line 1 "${fileName}"\n${fullSource}\n`, prototypes: [] } : preprocessSketch(fullSource, fileName);
   const srcFile = path.join(dir, 'sketch.ino.cpp');
   fs.writeFileSync(srcFile, pre.code);
-  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+  for (const [name, text] of Object.entries(files)) {
+    if (isIno(name)) continue;
+    const f = path.join(dir, ...name.split('/'));
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, text);
+  }
   const env = zigEnv(cfg);
   const flags = targetFlags(cfg, target);
   const timings = {};
-  const tus = [{ src: srcFile, obj: path.join(dir, 'sketch.o'), diagName: fileName }];
-  for (const name of Object.keys(files)) {
-    if (/\.(c|cpp|cc)$/.test(name)) tus.push({ src: path.join(dir, name), obj: path.join(dir, name + '.o'), diagName: name });
+  const tus = [{ src: srcFile, obj: path.join(dir, 'sketch.o'), diagName: fileName, text: source }];
+  for (const name of Object.keys(files).filter(isTU).sort()) {
+    tus.push({ src: path.join(dir, ...name.split('/')), obj: path.join(dir, 'obj', name.replace(/[\\/]/g, '__') + '.o'), diagName: name, text: files[name] });
   }
-  const usePch = options.pch !== false && !definesBeforeFastLED(source);
-  timings.pch = usePch;
-  const ccs = await Promise.all(tus.map((tu) => run(cfg.zig, ['c++', ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'),
-    ...(usePch ? ['-include-pch', lib.pch] : ['-include', path.join(ROOT, 'toolchain', 'include', 'pxl_sketch.h')]), ...definesToFlags(defines),
+  if (tus.length > 1) fs.mkdirSync(path.join(dir, 'obj'), { recursive: true });
+  // Each TU uses the precompiled FastLED prefix unless it #defines something before its
+  // first FastLED include (then FastLED.h must see that define: plain prelude instead).
+  const pchFor = (tu) => options.pch !== false && !definesBeforeFastLED(tu.text);
+  timings.pch = pchFor(tus[0]);
+  // at most cfg.jobs compiler processes at once (sketches like AutoResearch have 40+ TUs)
+  const ccs = await pool(tus, cfg.jobs, (tu) => run(cfg.zig, ['c++', ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-I' + dir,
+    ...(pchFor(tu) ? ['-include-pch', lib.pch] : ['-include', path.join(ROOT, 'toolchain', 'include', 'pxl_sketch.h')]), ...definesToFlags(defines),
     '-Wall', '-Wno-unused-variable', '-Wno-unused-function', '-fno-caret-diagnostics',
-    ...(tu.src.endsWith('.c') ? ['-x', 'c++'] : []), '-c', tu.src, '-o', tu.obj], { env, cwd: dir, signal })));
+    ...(tu.src.endsWith('.c') ? ['-x', 'c++'] : []), '-c', tu.src, '-o', tu.obj], { env, cwd: dir, signal }));
   timings.compileMs = Math.max(...ccs.map((c) => c.ms));
-  let diagnostics = ccs.flatMap((c) => parseDiagnostics(c.err, fileName, Object.keys(files)));
+  let diagnostics = ccs.flatMap((c) => parseDiagnostics(c.err, fileName, Object.keys(files), dir));
   const cc = { code: ccs.some((c) => c.code !== 0) ? 1 : 0, err: ccs.map((c) => c.err).join('') };
   if (cc.code !== 0) {
     return { ok: false, diagnostics, log: cc.err, key, timings: { ...timings, totalMs: performance.now() - t0 }, prototypes: pre.prototypes };
@@ -371,7 +466,7 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
       ...objs, lib.runtimeObj, ...lib.extraObjs, lib.archive, '-lws2_32', '-lwinmm', '-lbcrypt', '-ladvapi32', '-o', out], { env, cwd: dir, signal });
     timings.linkMs = link.ms;
   }
-  diagnostics = diagnostics.concat(parseDiagnostics(link.err, fileName));
+  diagnostics = diagnostics.concat(parseDiagnostics(link.err, fileName, Object.keys(files), dir));
   if (link.code !== 0) {
     const undef = [...link.err.matchAll(/undefined symbol: (.*)/g)].map((m) => m[1]);
     for (const u of undef) diagnostics.push({ file: fileName, line: 0, col: 0, severity: 'error', message: `undefined symbol: ${u}`, inSketch: true });

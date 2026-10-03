@@ -106,7 +106,9 @@ async function handleCompile(req, res) {
     if (!p) {
       p = withSlot(() => compileSketch(cfg, { source, defines, files, target: 'wasm', options: opts, signal: ac.signal }));
       inflight.set(dedupeKey, p);
-      p.finally(() => inflight.delete(dedupeKey));
+      // .catch: the derived promise must not become an unhandled rejection (would kill the service
+      // when compileSketch throws, e.g. for an invalid file name or define)
+      p.finally(() => inflight.delete(dedupeKey)).catch(() => {});
     }
     result = await p;
   } catch (e) {

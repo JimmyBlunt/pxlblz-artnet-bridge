@@ -11,7 +11,9 @@
     "verify": "node tests/verify.mjs",
     "test:service": "node tests/service-test.mjs",
     "service": "node service/server.mjs",
-    "bench": "node tests/bench-all.mjs"
+    "bench": "node tests/bench-all.mjs",
+    "test:multifile": "node tests/multifile-test.mjs",
+    "catalog": "node catalog/build-catalog.mjs"
   },
   "devDependencies": {
     "binaryen": "132.0.0"

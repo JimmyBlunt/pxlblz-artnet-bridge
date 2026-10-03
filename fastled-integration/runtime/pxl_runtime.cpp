@@ -32,6 +32,9 @@
 #include "fl/system/engine_events.h"
 #include "platforms/shared/ui/json/ui.h"
 #include "platforms/stub/time_stub.h"
+#include "fl/math/screenmap.h"
+#include "fl/math/xymap.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -292,10 +295,62 @@ void materialize_wire() {
     g_l2rgb_valid = false;
 }
 
+// Screen maps (CLEDController::setScreenMap(XYMap | ScreenMap | w,h)): the sketch's own
+// 2D layout, serialized as JSON for the host (pxl_screenmap_json). Last call per controller wins.
+struct ScreenMapRec { void *ctrl; char *json; };
+ScreenMapRec g_sm[PXL_MAX_STRIPS]; u32 g_sm_count = 0;
+char *g_sm_out = nullptr;
+u32 g_sm_version = 0;
+
+void sm_append(char **buf, size_t *len, size_t *cap, const char *s) {
+    const size_t n = strlen(s);
+    if (*len + n + 1 > *cap) {
+        size_t c = *cap ? *cap : 4096;
+        while (*len + n + 1 > c) c *= 2;
+        *buf = (char *)realloc(*buf, c);
+        *cap = c;
+    }
+    memcpy(*buf + *len, s, n + 1);
+    *len += n;
+}
+
+void record_screenmap(CLEDController *strip, const fl::ScreenMap &map) {
+    char *buf = nullptr; size_t len = 0, cap = 0;
+    char tmp[96];
+    const u32 n = map.getLength();
+    snprintf(tmp, sizeof tmp, "\"length\":%u,\"diameter\":%.9g", (unsigned)n, (double)map.getDiameter());
+    sm_append(&buf, &len, &cap, tmp);
+    if (const fl::XYMap *xy = map.getXYMap()) {
+        snprintf(tmp, sizeof tmp, ",\"xyWidth\":%u,\"xyHeight\":%u,\"xyType\":%d",
+                 (unsigned)xy->getWidth(), (unsigned)xy->getHeight(), (int)xy->getType());
+        sm_append(&buf, &len, &cap, tmp);
+    }
+    for (int axis = 0; axis < 2; ++axis) {
+        sm_append(&buf, &len, &cap, axis == 0 ? ",\"x\":[" : "],\"y\":[");
+        for (u32 i = 0; i < n; ++i) {
+            const fl::vec2f p = map.mapToIndex(i);
+            snprintf(tmp, sizeof tmp, i ? ",%.6g" : "%.6g", (double)(axis == 0 ? p.x : p.y));
+            sm_append(&buf, &len, &cap, tmp);
+        }
+    }
+    sm_append(&buf, &len, &cap, "]");
+    for (u32 k = 0; k < g_sm_count; ++k) {
+        if (g_sm[k].ctrl == (void *)strip) { free(g_sm[k].json); g_sm[k].json = buf; ++g_sm_version; return; }
+    }
+    if (g_sm_count >= PXL_MAX_STRIPS) { free(buf); return; }
+    g_sm[g_sm_count].ctrl = (void *)strip;
+    g_sm[g_sm_count].json = buf;
+    ++g_sm_count;
+    ++g_sm_version;
+}
+
 struct ShowListener : public fl::EngineEvents::Listener {
     void onEndShowLeds() FL_NO_EXCEPT override {
         finalize_show();
         check_budget();
+    }
+    void onCanvasUiSet(CLEDController *strip, const fl::ScreenMap &map) FL_NO_EXCEPT override {
+        record_screenmap(strip, map);
     }
 };
 ShowListener *g_listener = nullptr;
@@ -523,6 +578,31 @@ PXL_EXPORT(pxl_ui_set) int pxl_ui_set(const char *json) {
     g_ui_input(json);
     fl::processJsonUiPendingUpdates();
     return 0;
+}
+
+// --- screen maps (additive export, ABI 1): JSON array, one entry per controller with a
+// screen map: {"strip": <index in addLeds order, -1 if unknown>, "ledOffset", "length",
+// "diameter", ["xyWidth","xyHeight","xyType"], "x": [...], "y": [...]}
+PXL_EXPORT(pxl_screenmap_version) u32 pxl_screenmap_version(void) { return g_sm_version; }
+PXL_EXPORT(pxl_screenmap_json) const char *pxl_screenmap_json(void) {
+    char *buf = nullptr; size_t len = 0, cap = 0;
+    char tmp[64];
+    sm_append(&buf, &len, &cap, "[");
+    for (u32 k = 0; k < g_sm_count; ++k) {
+        int idx = -1, i = 0; u32 off = 0, found = 0;
+        for (CLEDController *c = CLEDController::head(); c; c = c->next(), ++i) {
+            if ((void *)c == g_sm[k].ctrl) { idx = i; found = 1; break; }
+            off += (u32)c->size();
+        }
+        snprintf(tmp, sizeof tmp, "%s{\"strip\":%d,\"ledOffset\":%u,", k ? "," : "", idx, found ? (unsigned)off : 0u);
+        sm_append(&buf, &len, &cap, tmp);
+        sm_append(&buf, &len, &cap, g_sm[k].json);
+        sm_append(&buf, &len, &cap, "}");
+    }
+    sm_append(&buf, &len, &cap, "]");
+    free(g_sm_out);
+    g_sm_out = buf;
+    return g_sm_out;
 }
 
 // --- memory helpers for the host

@@ -19,6 +19,8 @@ const CASES = [
     'Pacifica', 'TwinkleFox', 'NoisePlusPalette', 'XYMatrix', 'Noise', 'RGBCalibrate'].map((n) => ({ name: n, file: ex(n) })),
   { name: 'PipelineTest', file: path.join(ROOT, 'tests', 'sketches', 'PipelineTest.ino'),
     events: '300 {"Speed": 120}\n450 {"Sparkle": false}\n600 {"Hue shift": -40, "Brightness": 77}\n900 {"Brightness": 255}' },
+  // libm probe: 48 math functions x 4096 arguments, result bits hashed into LEDs (native libm alignment)
+  { name: 'MathParity', file: path.join(ROOT, 'tests', 'sketches', 'MathParity.ino') },
   { name: 'PipelineTest@4593', file: path.join(ROOT, 'tests', 'sketches', 'PipelineTest.ino'), defines: { PXLBLZ_NUM_LEDS: 4593 } },
 ].filter((c) => !ONLY || ONLY.split(',').includes(c.name));
 
@@ -42,10 +44,9 @@ for (const c of CASES) {
   const files = Object.fromEntries(fs.readdirSync(dir).filter((x) => /\.(h|hpp|cpp|c)$/.test(x)).map((x) => [x, fs.readFileSync(path.join(dir, x), 'utf8')]));
   const evFile = path.join(work, c.name.replace(/\W/g, '_') + '.events.txt');
   fs.writeFileSync(evFile, c.events || '');
-  const [w, n] = await Promise.all([
-    compileSketch(cfg, { source, defines, files, target: 'wasm' }),
-    compileSketch(cfg, { source, defines, files, target: 'native' }),
-  ]);
+  // sequential: one compiler process at a time (low-memory machines)
+  const w = await compileSketch(cfg, { source, defines, files, target: 'wasm' });
+  const n = await compileSketch(cfg, { source, defines, files, target: 'native' });
   if (!w.ok || !n.ok) {
     const d = (w.ok ? n : w).diagnostics.filter((x) => x.severity === 'error').slice(0, 3).map((x) => `${x.file}:${x.line}: ${x.message}`).join(' | ');
     rows.push({ name: c.name, error: `compile failed (${w.ok ? 'native' : 'wasm'}): ${d}` });

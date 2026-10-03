@@ -48,6 +48,24 @@ export interface FastLedStrip {
   enabled: boolean;
 }
 
+/** Screen map set by the sketch via CLEDController::setScreenMap(XYMap | ScreenMap | w,h). */
+export interface FastLedScreenMap {
+  /** index of the controller in addLeds() order (-1 if it no longer exists) */
+  strip: number;
+  /** first LED of that controller in getLeds() */
+  ledOffset: number;
+  length: number;
+  /** LED diameter in screen-map units (-1 = unset) */
+  diameter: number;
+  /** present when the map was built from an XYMap */
+  xyWidth?: number;
+  xyHeight?: number;
+  /** XYMap type: 0 serpentine, 1 line-by-line, 2 function, 3 lookup table */
+  xyType?: number;
+  x: number[];
+  y: number[];
+}
+
 export interface FastLedHostOptions {
   /** stdout/stderr text of the sketch (Serial.print, FastLED warnings) */
   onConsole?: (text: string, stream: 'stdout' | 'stderr') => void;
@@ -98,6 +116,9 @@ interface Exports {
   pxl_free: (p: number) => void;
   pxl_asyncify_data: () => number;
   pxl_set_lazy: (on: number) => void;
+  /** additive exports (modules built before they existed lack them) */
+  pxl_screenmap_json?: () => number;
+  pxl_screenmap_version?: () => number;
 }
 
 const ORDER_NAMES: Record<number, string> = { 0o012: 'RGB', 0o021: 'RBG', 0o102: 'GRB', 0o120: 'GBR', 0o201: 'BRG', 0o210: 'BGR' };
@@ -341,6 +362,22 @@ export class FastLedHost {
     }
     return out;
   }
+
+  /** Screen maps registered by the sketch (empty if none, or if the module predates this export). */
+  getScreenMaps(): FastLedScreenMap[] {
+    if (!this.ex.pxl_screenmap_json) return [];
+    const v = this.ex.pxl_screenmap_version?.() ?? 0;
+    if (v === this.smVersion) return this.smCache;
+    const p = this.ex.pxl_screenmap_json();
+    const b = new Uint8Array(this.ex.memory.buffer);
+    let e = p;
+    while (b[e]) e++;
+    try { this.smCache = JSON.parse(UTF8_DEC.decode(b.subarray(p, e))); } catch { this.smCache = []; }
+    this.smVersion = v;
+    return this.smCache;
+  }
+  private smVersion = -1;
+  private smCache: FastLedScreenMap[] = [];
 
   millis(): number { return this.ex.pxl_now_ms(); }
   showCount(): number { return this.ex.pxl_show_count(); }

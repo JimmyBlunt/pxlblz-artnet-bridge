@@ -1,1 +1,6 @@
 *.patch -text
+# catalog: verbatim upstream bytes (sha256 in fastled-examples.json must match the checkout)
+catalog/examples/** -text
+catalog/LICENSE.FastLED -text
+catalog/screenmaps/** -text
+catalog/fastled-examples.json -text

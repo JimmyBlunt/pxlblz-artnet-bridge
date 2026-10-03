@@ -29,6 +29,9 @@ Sketch (.ino) ──POST /compile──► service/server.mjs (127.0.0.1:9996)
   - `platforms/stub/platform_time.cpp.hpp`: `millis/micros/delay/delayMicroseconds` → virtuelle Uhr.
   - `platforms/shared/bitbang/bitbang_channel_driver.cpp.hpp`: Treiber ohne Bit-Banging (Senke).
   - `platforms/stub/clockless_channel_stub.h`: meldet `COLOR_ORDER`, Lazy-Encode (s. u.).
+  - `platforms/stub/isr_stub.hpp`: kein Timer-Thread im Single-Thread-Build (sonst hängt `setup()` bei Software-PWM).
+  - Overrides sind Kopien ganzer Upstream-Dateien; ihr Inhalts-Hash steht als `-DPXL_OVERRIDE_REV` in den Flags (zigs
+    Compile-Cache erkennt neu hinzugekommene, verdeckende Header sonst nicht).
   - Prelude: Workarounds für FastLEDs Single-Thread-Stub-Pfad (no-op Threads, `std::chrono`-Forward-Decl).
   - Eine Ein-Zeilen-Korrektur in FastLED selbst: `toolchain/fastled-local.patch` (ESP32-RMT-Mock, Windows-Build).
 - **Fiber:** `loop()` läuft in einer Koroutine. wasm: binaryen **Asyncify** (Import `env.pxl_suspend`,
@@ -80,6 +83,7 @@ Rechnen und `show()` kosten keine virtuelle Zeit.
 | `pxl_wire_raw_ptr()`, `pxl_wire_raw_len()` | L2 exakt wie auf der Datenleitung (COLOR_ORDER, RGBW) |
 | `pxl_strip_count()`, `pxl_strips_ptr()` | je Strip 10 × i32: ledOffset, ledCount, wireOffset, wireLen, pin, colorOrder (EOrder oktal), rgbw, isSpi, enabled, 0 |
 | `pxl_ui_json() -> char*`, `pxl_ui_version()`, `pxl_ui_set(json) -> i32` | FastLED-JsonUi: Elementliste; Setzen per `{"<id oder name>": wert}` |
+| `pxl_screenmap_json() -> char*`, `pxl_screenmap_version()` | Screen-Maps aus `setScreenMap(XYMap \| ScreenMap \| w,h)`: `[{strip, ledOffset, length, diameter, xyWidth?, xyHeight?, xyType?, x[], y[]}]` (additiv, ABI bleibt 1; ältere Hosts ignorieren den Export) |
 | `pxl_now_ms() f64`, `pxl_now_us_lo/hi()`, `pxl_target_ms()`, `pxl_show_count()`, `pxl_loop_count()`, `pxl_frame_show_count()`, `pxl_brightness()` | Status/Var-Watcher |
 | `pxl_set_budget(loops, shows)`, `pxl_set_lazy(on)`, `pxl_alloc/pxl_free`, `pxl_asyncify_data()` | Hilfen |
 
@@ -99,6 +103,7 @@ host.getWire();                // Uint8Array L2, RGB-Reihenfolge -> Art-Net
 host.getWireRaw(); host.getStrips(); host.ledCount(); host.millis(); host.showCount();
 host.getUi();                  // [{id, name, type, kind, min, max, step, options, value, defaultValue, group}]
 host.setUi('Speed', 80);       // per Name (für Persistenz) oder id; klemmt wie FastLED
+host.getScreenMaps();          // Layout des Sketches (leer, wenn keins gesetzt oder Modul zu alt)
 host.setBudget(loops, shows); host.abiVersion();
 ```
 Wirft beim Trap des Sketches (Instanz ist danach tot; neu instanziieren). Ein Neustart = neue Instanz
@@ -113,13 +118,30 @@ npm run service            # http://127.0.0.1:9996  (Port: --port, PXL_FASTLED_P
 - `GET /version` → FastLED-Commit/Version, zig-Version, ABI, Node
 - `POST /compile` `{source, defines?, files?, options?}` → `{ok, key, cached, wasm (base64), wasmUrl, size, diagnostics[], prototypes[], timings}`
   - `defines`: z. B. `{"PXLBLZ_NUM_LEDS": 4593}` → `-D`
-  - `files`: weitere Dateien des Sketch-Ordners (`*.h`, `*.cpp`)
+  - `files`: weitere Dateien des Sketch-Ordners, Pfad relativ zum Ordner, Unterordner erlaubt
+    (`{"helper.h": …, "src/wave.cpp": …, "Tab2.ino": …}`); Modell siehe „Mehrdatei-Sketches“
   - `options`: `optimize: "fast"|"size"|"full"`, `autoPrototypes` (Standard an), `fileName`, `inline:false`
   - `Accept: application/wasm` → bei Erfolg rohe Bytes
   - Diagnosen: `{file:"sketch.ino", line, col, severity, message}` auf Zeilen des Nutzer-Sketches
 - `GET /artifact/<key>.wasm` → gecachtes Modul
 - CORS für `http://localhost:5174/5175` (+127.0.0.1), inkl. `Access-Control-Allow-Private-Network: true`.
   Belegter Port → klare Fehlermeldung, Exit 1. Cache nach Hash(Quelltext, defines, Dateien, Lib-Version).
+
+## Mehrdatei-Sketches
+
+Wie Arduino/PlatformIO: der Haupt-Sketch (`source`) ist eine Übersetzungseinheit mit Arduino-Vorverarbeitung;
+weitere `.ino`/`.pde` werden alphabetisch angehängt (IDE-Tabs, mit `#line`). **Jede** `.c/.cpp/.cc/.cxx` im Ordner,
+auch in Unterordnern, ist eine eigene Einheit (PlatformIO-Semantik; Obermenge der Arduino-IDE, die nur Wurzel + `src/`
+übersetzt). Header/Daten (`.h .hpp .inc .json .txt .csv` …) liegen in derselben Struktur, `#include "…"` löst relativ
+zur einbindenden Datei auf, der Sketch-Ordner ist zusätzlich im Include-Pfad. Eine Einheit, die vor `#include <FastLED.h>`
+ein Makro definiert, wird ohne PCH übersetzt. Pfade: `/`-getrennt, kein `..`, nichts Absolutes/Verstecktes (sonst HTTP 400).
+Diagnosen tragen den relativen Pfad (`src/wave.cpp`, `Tab2.ino`). Höchstens `jobs` Compiler gleichzeitig. Test: `npm run test:multifile`.
+
+## Beispielkatalog
+
+`catalog/`: alle 114 offiziellen FastLED-Beispiele mit Quelltext, Kategorie, Probelauf-Ergebnis, Geometrie und deutschem
+Hinweis für die IDE; Schema und Neu-Erzeugung in [catalog/README.md](catalog/README.md), Ergebnisse in
+[catalog/CATALOG_RESULTS.md](catalog/CATALOG_RESULTS.md).
 
 ## Einrichten, bauen, prüfen
 
@@ -128,6 +150,8 @@ npm run setup      # FastLED @ ec0a0f3 + Patch, zig 0.16 (uv/pip-venv), npm-Pake
 npm run build      # vorkompilierte Libs wasm + native (kalt ca. 1,5 min je Ziel, danach Sekunden)
 npm run verify     # oder .\verify.ps1  -> Tabelle + RESULTS.md (Exit 0 = 0 abweichende Bytes)
 npm run test:service
+npm run test:multifile   # Mehrdatei-Modell (Dienst + nativ)
+npm run catalog          # Beispielkatalog neu erzeugen (Dienst auf 127.0.0.1:9997)
 npm run bench      # Compile-/Frame-Zeiten bei 4.593 LEDs
 node toolchain/build.mjs sketch mein.ino [-DPXLBLZ_NUM_LEDS=136] [--native]
 ```
@@ -161,6 +185,13 @@ Pfade: `config.json` (relativ zum Ordner, Standard `vendor/fastled`, `.venv`), m
 - Automatische Prototypen (Arduino-IDE-Verhalten) per einfacher Erkennung; exotische Signaturen ggf. selbst deklarieren.
 - Nur Controller über `addLeds<>()` (Clockless) liefern L2; SPI-Chipsätze (APA102 …) liefern L1, L2 nur eingeschränkt.
 - Referenz ist FastLEDs Stub-Plattform nativ (x86_64). Gegen echte ESP32-Hardware ist nicht gemessen.
+- libm: Die native Referenz linkt dieselben libm-Implementierungen wie der wasm-Build (musl-Quellen aus zigs wasi-libc +
+  `native/libm_ref.zig` = zigs `lib/c/math.zig`), statt mingw-w64s eigener. Sonst weichen u. a. `powf/atan2f/asinf/tanhf`
+  im letzten Bit ab (Animartrix: 3 Bytes in 600 Frames). Geprüft durch `tests/sketches/MathParity.ino` (48 Funktionen) in `npm run verify`.
+  Echte Hardware (newlib auf ESP32) rechnet wiederum mit eigener libm; float-lastige Effekte können dort im letzten Bit abweichen.
+- Timer-ISRs (`fl::isr`, Software-PWM für `analogWrite`/`setPwmFrequency`, `ANALOG_RGB`) feuern nicht: FastLEDs Stub startet
+  dafür einen Thread, der im Single-Thread-Modus synchron liefe und `setup()` nie zurückkehren ließe (AnalogOutput,
+  ElPanelReactive). Override `platforms/stub/isr_stub.hpp` startet ihn nicht; GPIO-Pins haben ohnehin keine sichtbare Ausgabe.
 - RESULTS.md/README.md sind UTF-8 ohne BOM; in Windows PowerShell 5.1 mit `Get-Content -Encoding UTF8` lesen.
 
 ## Dateien
@@ -172,8 +203,9 @@ runtime/fastledWasmHost.ts     JS-Host
 toolchain/toolchain.mjs        Build-/Compile-Logik (zig, PCH, Asyncify, Diagnosen, Prototypen)
 toolchain/build.mjs, setup.mjs, pins.json, fastled-local.patch, pxl_prelude.h
 toolchain/include/             Arduino.h, pxl_sketch.h, pxl_sketch_fastled.h (PCH)
-toolchain/override/platforms/  die drei Override-Header
-native/harness.cpp, native/fiber_win.cpp   native Referenz
+toolchain/override/platforms/  die Override-Header (Kopien ganzer Upstream-Dateien)
+native/harness.cpp, native/fiber_win.cpp   native Referenz;  native/libm_ref.zig  libm-Angleichung der Referenz
+catalog/                       Beispielkatalog (build-catalog.mjs, fastled-examples.json, examples/, screenmaps/)
 service/server.mjs             Compile-Dienst
-tests/verify.mjs, trace.mjs, service-test.mjs, bench-all.mjs, bench.mjs, smoke.mjs, sketches/*.ino
+tests/verify.mjs, trace.mjs, service-test.mjs, multifile-test.mjs, bench-all.mjs, bench.mjs, smoke.mjs, sketches/*.ino
 ```
