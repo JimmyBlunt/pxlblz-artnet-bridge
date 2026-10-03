@@ -122,7 +122,7 @@ try {
 
     # FastLED compile service (fastled-integration): compiles FastLED Patterns for the IDE preview.
     # Optional - a failure is a warning only; Pixelblaze Patterns and the Art-Net output keep working.
-    # launcher-config.json "fastledIntegrationPath"; default <workspace>astled-integration, else <workspace>astled-work.
+    # launcher-config.json "fastledIntegrationPath"; default <workspace>\fastled-integration, else <workspace>\fastled-work.
     $fastledDir = if ($launcherConfig.PSObject.Properties['fastledIntegrationPath'] -and $launcherConfig.fastledIntegrationPath) { $launcherConfig.fastledIntegrationPath } else { Join-Path $root 'fastled-integration' }
     if (-not ($launcherConfig.PSObject.Properties['fastledIntegrationPath'] -and $launcherConfig.fastledIntegrationPath) -and -not (Test-Path -LiteralPath $fastledDir) -and (Test-Path -LiteralPath (Join-Path $root 'fastled-work'))) { $fastledDir = Join-Path $root 'fastled-work' }
     $fastledPort = 9996

@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$RouterBinDirectory,
     # Router config the starter uses. Omitted on a re-install: the previous choice is kept.
     [string]$RouterConfig,
-    # Folder of fastled-integration (FastLED compile service). Omitted: previous choice, else <workspace>astled-integration.
+    # Folder of fastled-integration (FastLED compile service). Omitted: previous choice, else <workspace>\fastled-integration.
     [string]$FastLedIntegrationPath,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'PXLBLZ-IDE-ArtNet'),
     [string]$DesktopDirectory = [Environment]::GetFolderPath('Desktop'),
