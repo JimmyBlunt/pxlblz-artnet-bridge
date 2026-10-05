@@ -1,7 +1,7 @@
 From 5ce5dee3efca33140de830d22c575b6732bce9b0 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 01:05:07 +1000
-Subject: [PATCH 05/13] Edit FastLED Patterns as C++ in the Studio editor
+Subject: [PATCH 05/14] Edit FastLED Patterns as C++ in the Studio editor
  (local #9002)
 
 Same Editor/Monaco surface, editorFlavor stays 'pattern'; the language is

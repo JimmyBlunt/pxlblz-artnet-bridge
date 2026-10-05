@@ -1,7 +1,7 @@
 From b84724bb70283d5f8d4e17c79f88baf6597ccccc Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 00:21:25 +1000
-Subject: [PATCH 01/13] Add FastLED Pattern engine: marker, wasm host, handle,
+Subject: [PATCH 01/14] Add FastLED Pattern engine: marker, wasm host, handle,
  controls (local #9002)
 
 A Pattern whose leading comment block carries `// @pxlblz-language fastled`

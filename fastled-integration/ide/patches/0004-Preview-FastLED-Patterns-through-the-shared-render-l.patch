@@ -1,7 +1,7 @@
 From 98401b0ca81c3095ab63be17f66e8e3136b74029 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 00:55:51 +1000
-Subject: [PATCH 04/13] Preview FastLED Patterns through the shared render loop
+Subject: [PATCH 04/14] Preview FastLED Patterns through the shared render loop
  (local #9002)
 
 A FastLED previewSource takes its own branch in the Preview build effect:

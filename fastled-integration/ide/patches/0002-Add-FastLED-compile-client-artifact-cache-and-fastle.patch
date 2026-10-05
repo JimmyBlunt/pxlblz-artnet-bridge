@@ -1,7 +1,7 @@
 From 6d922c7e202a3cd0984d615f14cba8ab55f791c2 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 00:31:45 +1000
-Subject: [PATCH 02/13] Add FastLED compile client, artifact cache and
+Subject: [PATCH 02/14] Add FastLED compile client, artifact cache and
  fastledStore (local #9002)
 
 - fastledCompileClient.ts: POST /compile {source, defines} to the local

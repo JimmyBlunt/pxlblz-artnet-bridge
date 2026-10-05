@@ -1,0 +1,1435 @@
+From 2ceaea3f28bdffc9e7926cdcfb17b07a6cd8b607 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Mon, 5 Oct 2026 20:36:58 +1100
+Subject: [PATCH 14/14] Active mask for installation maps: masked slots always
+ black (local #9002)
+
+The TouchDesigner installation maps (10,330 slots) contain 3,368 slots
+without an LED position (TD active mask = 0), parked at one coordinate.
+82 of them are routed to physical LEDs that must stay dark, but every
+Pattern coloured them and the parked cluster skewed preview and FastLED
+surface bounds.
+
+- Storage: importMetadata.activeMask on the map record (existing
+  import_metadata_json column, no migration, no API change: PATCH
+  /api/maps/:id already writes importMetadata as a whole):
+  { version: 1, encoding: 'rle01', count, first, runs, active, source?,
+  fingerprint: 'fnv1a32:..', updatedAt? }. src/engine/maps/activeMask.ts
+  encodes/decodes/validates it.
+- MapImportMetadata is now a union: Controller imports (kind
+  'controller') and installation metadata (kind 'installation', mask
+  only). Frozen/read-only maps, the "Imported" facts and Controller
+  stage-map matching check isControllerMapImport, so adding a mask never
+  freezes an editable map.
+- mapFromRecord validates the mask against the point count (wrong length
+  or malformed: ignored, console warning, amber hint); resolveLayout
+  exposes activeMask per pixel index plus the summary.
+- createRenderLoop({ activeMask }): render functions still run for every
+  index (Pattern state/determinism unchanged); masked indices are written
+  black into the packed frame / pixel list, so preview and the router
+  frame (externalPixelOutput) are black there and byte-identical
+  elsewhere, for Pixelblaze and FastLED Patterns.
+- Preview hands the renderer only the active indices (positions, normals,
+  compacted frame copy): the parked cluster is not drawn and no longer
+  affects measured bounds/spacing.
+- FastLED surface projection: masked map pixels -> -1 and excluded from
+  the fit bounds and the automatic 3D axis choice.
+- Deck hint "Maske: 6.962 aktiv / 3.368 ausgeblendet"; map pane fact row.
+- scripts/set-map-active-mask.mjs sets/clears a mask from a 0/1 JSON
+  array through the local API (pxlblz_manager-style local dev session,
+  merges existing metadata, refuses a length mismatch, verifies).
+- Docs: CONTEXT.md "Active mask", Technical Reference.
+
+Checks run manually (husky cannot run here): eslint src,
+check:e2e-coverage, check:e2e-locators, tsc --noEmit, vitest node:
+src/engine/maps (incl. new activeMask.test.ts), renderLoop,
+src/engine/fastled, mapStore, showModel, importedMap, cloudflare/maps,
+fastledProjectionStore (all pass); vitest jsdom: Preview, PreviewDeck
+(new test passes; 2 pre-existing de-DE locale failures), MapContextPane
+(1 pre-existing de-DE locale failure), ControllerProfilePage.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CONTEXT.md                                   |   4 +
+ docs/reference/PXLBLZ Technical Reference.md |   1 +
+ scripts/set-map-active-mask.mjs              | 146 +++++++++
+ src/components/MapContextPane.tsx            |  33 ++-
+ src/components/Preview.tsx                   |  32 +-
+ src/components/PreviewDeck.test.tsx          |  13 +
+ src/components/PreviewDeck.tsx               |  12 +
+ src/engine/fastled/fastledProjection.ts      |  31 +-
+ src/engine/layout.ts                         |  26 +-
+ src/engine/maps/activeMask.test.ts           | 294 +++++++++++++++++++
+ src/engine/maps/activeMask.ts                | 207 +++++++++++++
+ src/engine/maps/custom.ts                    |  14 +-
+ src/engine/maps/mapAuthoring.ts              |   4 +-
+ src/engine/maps/types.ts                     |   7 +
+ src/engine/personalContentRecords.ts         |  22 +-
+ src/engine/renderLoop.ts                     |  21 +-
+ src/engine/showModel.ts                      |  11 +-
+ src/store/editorStore.ts                     |   6 +
+ src/store/mapStore.ts                        |  13 +-
+ 19 files changed, 866 insertions(+), 31 deletions(-)
+ create mode 100644 scripts/set-map-active-mask.mjs
+ create mode 100644 src/engine/maps/activeMask.test.ts
+ create mode 100644 src/engine/maps/activeMask.ts
+
+diff --git a/CONTEXT.md b/CONTEXT.md
+index 7a781380..d3bfd2e5 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -28,6 +28,10 @@ _Avoid_: demo sketch; calling it a stock Pattern (stock Patterns are Pixelblaze)
+ How a **FastLED Pattern**'s own LEDs reach the map's pixels. *Index*: map pixel i shows `leds[i]` (strips; sketches that follow the map size through `PXLBLZ_NUM_LEDS`). *Surface* ("Fläche"): the sketch keeps its own NUM_LEDS and raster; every map pixel takes the bytes of the sketch LED nearest to its 2D map position (no blending, so the bytes stay FastLED's), with Contain/Fill fit, optional flips and, for 3D maps, an axis pair. The sketch raster comes from the sketch's FastLED screen map, else the example catalogue's width×height, else a square guess. Automatic unless chosen: surface for a 2D/3D sketch on a ≥2D map whose LED count differs from the map's. Stored as `// @pxlblz-projection …` in an editable Pattern's header (never compiled) or in a read-only example's per-demo overrides.
+ _Avoid_: mapping (a **Map** is the coordinate set), resampling/scaling (nothing is interpolated).
+ 
++**Active mask** (local fork):
++Per-slot flag of an installation **Map** (one entry per point, in map order): 1 = the slot has a real LED position, 0 = it has none (TouchDesigner active mask = 0; the export parks such slots at one coordinate). Every Pattern (Pixelblaze and FastLED) still runs for masked slots — render functions are called for every index — but their output is forced to black in the preview and in the router frame, they are not drawn, and they do not count towards a **FastLED projection** surface fit. Stored on the map record as `importMetadata.activeMask` (compact run-length form); a mask whose length differs from the map's point count is ignored with a warning. The deck shows "Maske: N aktiv / M ausgeblendet".
++_Avoid_: hiding pixels (they still exist, keep their index and are routed — just always black); calling the mask a Map or a route filter.
++
+ **FastLED compile service**:
+ The local helper (`fastled-integration/service/server.mjs`, default `http://127.0.0.1:9996`) that turns FastLED Pattern source plus defines (`PXLBLZ_NUM_LEDS` = the map's pixel count) into a wasm module and compiler diagnostics. Started by the Art-Net launcher; when it is not reachable the preview says so and the editor keeps saving.
+ 
+diff --git a/docs/reference/PXLBLZ Technical Reference.md b/docs/reference/PXLBLZ Technical Reference.md
+index ec91b5d6..2d9aff62 100644
+--- a/docs/reference/PXLBLZ Technical Reference.md	
++++ b/docs/reference/PXLBLZ Technical Reference.md	
+@@ -444,6 +444,7 @@ A FastLED Pattern is detected by `patternLanguage(src)` (`src/engine/patternLang
+ - Example catalogue: all official FastLED examples are vendored read-only under `src/engine/fastled/catalog/` (`fastled-examples.json` schema 1 + verbatim files, sha256-checked, `-text` in `.gitattributes`; refresh with `node scripts/sync-fastled-catalog.mjs <engine catalog dir>`). Index and files load lazily (`fastledCatalogLoader.ts`, `fastledCatalogStore`). The Patterns rail shows a "FastLED" built-in folder with catalogue categories; hardware-only examples carry an "HW" badge with the catalogue's German note. An example opens read-only under the built-in key `fastled:<id>` in the stock-demo slot (`activeDemoName`), so routes, per-demo settings and Clone are shared with stock demos; its source is a header (marker, dim, main file, provenance, hardware note) plus the verbatim files, and the recommended pixel count is the example's LED count. Clone copies exactly that source into a personal FastLED Pattern.
+ - Preview: `Preview.tsx` resolves the layout with the `@pxlblz-dim` dimension, passes `PXLBLZ_NUM_LEDS` (and `PXLBLZ_WIDTH/HEIGHT` for regular grids), runs the vendored host (`src/engine/fastled/fastledWasmHost.ts`, ABI 1) in a Web Worker (`fastled.worker.ts` → `fastledWorkerCore.ts`, main side `FastLedWorkerHost`, `?fastledWorker=0` = main thread) and drives `createFastLedPatternHandle` through the shared `startLoop` (fast shim always). `beforeRender(dt)` runs `frame(dt)`; `render*(i)` emits byte/255 of L2 wire bytes (default, RGB order after brightness/correction/dither) or L1 `leds[]`. byte/255 → `Math.round(v*255)` is exact, so the packed frame and the router receive FastLED's bytes (golden test: 0 differing bytes against the native FastLED reference).
+ - Projection (`src/engine/fastled/fastledProjection.ts`, deck section "FastLED" in `FastLedProjectionPanel.tsx`): *index* keeps `leds[i]` → map index i and passes `PXLBLZ_NUM_LEDS` = map pixel count; *surface* compiles without PXLBLZ defines (the sketch keeps its NUM_LEDS) and gives the handle a precomputed table map index → sketch LED (−1 = black), so `render*(i)` emits the L2/L1 bytes of `table[i]` and the packed frame keeps the map's pixel count (router frame size unchanged). Sketch positions: the sketch's screen maps (`getScreenMaps()`, host export `pxl_screenmap_json`, sent by the worker with `started`/changed frames; serpentine/XYMap already applied), else the catalogue `geometry` width×height row-major (serpentine when the source declares `kMatrixSerpentineLayout = true`/`SERPENTINE true`; a clone finds its example by the provenance header), else a square guess with a deck notice. Map positions: each pixel's `sample` (2D: x,y; 3D: chosen axis pair, default the two largest extents), fitted onto the sketch bounds padded by half an LED (Contain: uniform scale, whole map inside the sketch; Fill: per axis), optional flips; nearest sketch LED within one LED pitch via a bucket grid, ties → lower index; memoised per (map points, sketch layout, options), ~ms for 10,330 pixels. Automatic choice: surface for `@pxlblz-dim` ≥ 2 on a ≥2D map unless the source uses `PXLBLZ_NUM_LEDS/WIDTH/HEIGHT` or the known LED count (catalogue, or after start) equals the map's. Persistence: `// @pxlblz-projection [index|surface] [fit=fill] [flip=x|y|xy] [axes=xy|xz|yz]` in an editable Pattern's header; the compile request blanks that line and the artifact cache key drops it, so a projection change never recompiles. Read-only examples store the same text as `fastledProjection` in their `demoOverrides` bag (cleared by "Revert to recommended"); Clone writes it into the copy's header.
++- Active mask (`src/engine/maps/activeMask.ts`, all Patterns, not only FastLED): a custom map record may carry `importMetadata.activeMask = { version: 1, encoding: 'rle01', count, first, runs, active, source?, fingerprint?, updatedAt? }` — alternating run lengths starting with value `first`, summing to `count`; `active` and `fingerprint` (`fnv1a32:` over the 0/1 bytes) are checked on decode. Stored in the existing `import_metadata_json` column (no migration; `PATCH /api/maps/:id` already writes `importMetadata` as a whole). A map whose metadata has no Controller provenance uses `kind: 'installation'`; only `kind: 'controller'` (`isControllerMapImport`) makes a map frozen or shows the "Imported" facts. `mapFromRecord` validates the mask against the point count (wrong length or malformed → ignored, `console.warn` and an amber deck/map-pane warning) and puts it on the `PixelMap`; `resolveLayout` returns `activeMask` (per pixel index, active past the baked array, null when nothing is masked) plus the summary. `createRenderLoop({ activeMask })` still calls `render*` for every index (Pattern state and determinism unchanged) and writes black for masked indices into the packed frame / pixel list, so preview and `externalPixelOutput` (router) get black there and unchanged bytes elsewhere. `Preview.tsx` hands the renderer only the active indices (positions, normals, and a compacted copy of each frame), so the parked cluster is neither drawn nor part of the measured bounds/spacing. The FastLED surface table gets `active`: masked points → −1 and excluded from the map bounds (Contain/Fill fit only real LED positions) and from the automatic 3D axis choice. Deck: "Maske: 6.962 aktiv / 3.368 ausgeblendet" (`editorStore.activeMaskLabel`); map pane fact row "Maske". Set/clear a mask with `node scripts/set-map-active-mask.mjs --map <id> --mask <0/1 JSON array>` (local dev session, merges with existing metadata, verifies after writing). Not applied yet: Shows, Gallery thumbnails, Controller (hardware) export.
+ - Preview start: the deck pauses itself while no Pattern is loaded (upstream #478); it now resumes when the pause was automatic and a Pattern arrives (cold load, deep link), while a user pause stays.
+ - Controls: FastLED UI elements map to ranged slider/toggle Controls (`PatternMetadata.controls[].range`); values persist in `PatternRecord.controls` (`controls_json`) keyed by UI name.
+ - Worker and watchdog: the worker runs the same host calls in the same order, so bytes are identical; frames are pipelined by one IDE frame (frame(dt_k) requests frame k while frame k-1 is shown; a late answer repeats the last frame and the deltas accumulate). No answer within 2 s (setup 10 s) terminates the worker: runtime error, last frame kept. The host's loop/show budget still reports runaway loops that call `millis/delay/show` (they keep running). Measured at 4,593 LEDs: ~1 ms per frame in the worker, ~1.4 ms round trip, main-thread cost ~0.1 ms per frame; added latency one IDE frame.
+diff --git a/scripts/set-map-active-mask.mjs b/scripts/set-map-active-mask.mjs
+new file mode 100644
+index 00000000..207b77aa
+--- /dev/null
++++ b/scripts/set-map-active-mask.mjs
+@@ -0,0 +1,146 @@
++#!/usr/bin/env node
++// Sets (or clears) the active mask of one map through the local PXLBLZ API.
++//
++//   node scripts/set-map-active-mask.mjs --map <mapId> --mask <mask.json> [options]
++//
++// <mask.json>: a JSON array of 0/1 (one entry per map slot, in map order), or an
++// object with such an array under `mask`, `activeMask` or `active`.
++//
++// Options:
++//   --ide-url <url>    Local IDE/API origin (default http://localhost:5175; only
++//                      localhost / 127.0.0.1 allowed).
++//   --dev-vars <path>  .dev.vars holding the API's SESSION_SECRET (default
++//                      E:/PXLBLZ-ArtNet/PXLBLZ-IDE-main/.dev.vars - the checkout
++//                      that serves the API on 5174).
++//   --source <text>    Provenance stored with the mask (default touchdesigner).
++//   --dry-run          Validate and print what would be written; no PATCH.
++//   --clear            Remove the mask (keeps other importMetadata fields).
++//
++// Same local-dev session approach as pxlblz_manager's ide(): a session token for
++// the provisioned local developer identity is minted from SESSION_SECRET with
++// the IDE's own createSessionToken (no browser cookie). The mask is stored as
++// `importMetadata.activeMask` (rle01, see src/engine/maps/activeMask.ts); other
++// importMetadata fields are kept. PATCH /api/maps/:id replaces the whole
++// importMetadata column, so the script merges with the current value first.
++import fs from 'node:fs'
++import path from 'node:path'
++import assert from 'node:assert/strict'
++import { fileURLToPath, pathToFileURL } from 'node:url'
++
++const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
++
++function parseArgs(argv) {
++  const out = { ideUrl: 'http://localhost:5175', devVars: 'E:/PXLBLZ-ArtNet/PXLBLZ-IDE-main/.dev.vars', source: 'touchdesigner', dryRun: false, clear: false }
++  for (let i = 0; i < argv.length; i++) {
++    const a = argv[i]
++    const next = () => {
++      const v = argv[++i]
++      if (v === undefined) throw new Error(`${a} needs a value`)
++      return v
++    }
++    if (a === '--map') out.map = next()
++    else if (a === '--mask') out.mask = next()
++    else if (a === '--ide-url') out.ideUrl = next()
++    else if (a === '--dev-vars') out.devVars = next()
++    else if (a === '--source') out.source = next()
++    else if (a === '--dry-run') out.dryRun = true
++    else if (a === '--clear') out.clear = true
++    else if (a === '-h' || a === '--help') out.help = true
++    else throw new Error(`unknown argument ${a}`)
++  }
++  return out
++}
++
++function readMaskFile(file) {
++  const value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
++  const arr = Array.isArray(value) ? value : value?.mask ?? value?.activeMask ?? value?.active
++  if (!Array.isArray(arr)) throw new Error(`${file}: expected a JSON array of 0/1 (or {mask:[...]})`)
++  arr.forEach((v, i) => {
++    if (!(v === 0 || v === 1 || v === true || v === false)) throw new Error(`${file}: entry ${i} is ${JSON.stringify(v)}, expected 0 or 1`)
++  })
++  return arr.map((v) => (v ? 1 : 0))
++}
++
++async function session(ideUrl, devVarsPath) {
++  assert(['localhost', '127.0.0.1'].includes(new URL(ideUrl).hostname), 'Only a local IDE instance is allowed')
++  const vars = fs.readFileSync(devVarsPath, 'utf8')
++  const match = vars.match(/^\s*SESSION_SECRET\s*=\s*(.+?)\s*$/m)
++  assert(match, `SESSION_SECRET missing in ${devVarsPath}`)
++  const secret = match[1].replace(/^(['"])(.*)\1$/, '$2')
++  const { createSessionToken } = await import(pathToFileURL(path.join(ROOT, 'src/cloudflare/auth.ts')).href)
++  const token = await createSessionToken({
++    userId: 'github:local-dev', primaryProvider: 'github', primaryHandle: 'local-dev',
++    githubUserId: 'local-dev', githubLogin: 'local-dev', displayName: 'Local Dev', avatarUrl: null,
++  }, secret)
++  return async (endpoint, { method = 'GET', body } = {}) => {
++    const response = await fetch(ideUrl.replace(/\/+$/, '') + endpoint, {
++      method,
++      headers: { Cookie: 'pxlblz_session=' + encodeURIComponent(token), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
++      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++      signal: AbortSignal.timeout(30000),
++    })
++    const text = await response.text()
++    let value
++    try { value = JSON.parse(text) } catch { throw new Error(`Invalid response: HTTP ${response.status}`) }
++    if (!response.ok || value.ok === false) throw new Error(value.error || `HTTP ${response.status}`)
++    return value
++  }
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2))
++  if (args.help || !args.map || (!args.mask && !args.clear)) {
++    console.log('usage: node scripts/set-map-active-mask.mjs --map <mapId> (--mask <mask.json> | --clear) [--ide-url URL] [--dev-vars PATH] [--source TEXT] [--dry-run]')
++    process.exit(args.help ? 0 : 2)
++  }
++  const { encodeActiveMask, decodeActiveMask, formatActiveMaskSummary } = await import(pathToFileURL(path.join(ROOT, 'src/engine/maps/activeMask.ts')).href)
++  const api = await session(args.ideUrl, args.devVars)
++
++  const { maps } = await api('/api/maps')
++  const map = maps.find((m) => m.id === args.map)
++  if (!map) throw new Error(`map ${args.map} not found (${maps.length} maps)`)
++  const pointCount = Array.isArray(map.points) ? map.points.length : 0
++  console.log(`map: ${map.name} (${map.id}), dim ${map.dim}, ${pointCount} points, generator ${map.generator}`)
++  const existing = map.importMetadata && typeof map.importMetadata === 'object' ? map.importMetadata : null
++  console.log(`current importMetadata: ${existing ? `kind=${existing.kind ?? '(none)'}${existing.activeMask ? `, activeMask ${existing.activeMask.active}/${existing.activeMask.count}` : ', no activeMask'}` : 'none'}`)
++
++  let importMetadata
++  if (args.clear) {
++    if (!existing?.activeMask) { console.log('nothing to clear'); return }
++    const { activeMask: _drop, ...rest } = existing
++    // A metadata object that only carried the mask goes away entirely (null).
++    importMetadata = rest.kind === 'controller' || Object.keys(rest).some((k) => k !== 'kind' && k !== 'source') ? rest : null
++    console.log('clearing activeMask')
++  } else {
++    const bits = readMaskFile(args.mask)
++    if (bits.length !== pointCount) {
++      throw new Error(`mask has ${bits.length} entries but the map has ${pointCount} points - not written`)
++    }
++    const activeMask = encodeActiveMask(bits, { source: args.source, updatedAt: Date.now() })
++    // Self-check: the stored form decodes back to the same bits.
++    const back = decodeActiveMask(JSON.parse(JSON.stringify(activeMask)))
++    assert(back.length === bits.length && back.every((v, i) => v === bits[i]), 'rle01 round trip failed')
++    importMetadata = existing ? { ...existing, activeMask } : { kind: 'installation', source: args.source, activeMask }
++    console.log(`mask: ${formatActiveMaskSummary(activeMask.active, activeMask.count - activeMask.active)}, ${activeMask.runs.length} runs, ${JSON.stringify(activeMask).length} bytes, ${activeMask.fingerprint}`)
++  }
++
++  if (args.dryRun) {
++    console.log('dry run - nothing written')
++    return
++  }
++  await api(`/api/maps/${encodeURIComponent(map.id)}`, { method: 'PATCH', body: { importMetadata, updatedAt: Date.now() } })
++  const after = (await api('/api/maps')).maps.find((m) => m.id === map.id)
++  const stored = after?.importMetadata?.activeMask
++  if (args.clear) {
++    assert(!stored, 'mask still present after clear')
++    console.log('cleared. Reload the IDE tab to pick it up.')
++  } else {
++    assert(stored && stored.fingerprint === importMetadata.activeMask.fingerprint, 'stored mask does not match')
++    console.log('written and verified. Reload the IDE tab to pick it up.')
++  }
++}
++
++main().catch((err) => {
++  console.error(`error: ${err instanceof Error ? err.message : String(err)}`)
++  process.exit(1)
++})
+diff --git a/src/components/MapContextPane.tsx b/src/components/MapContextPane.tsx
+index 3116c5ac..7d52cf05 100644
+--- a/src/components/MapContextPane.tsx
++++ b/src/components/MapContextPane.tsx
+@@ -14,7 +14,12 @@ import {
+ } from '@/engine/mapDiagnosticViewport'
+ import { paintMapDiagnosticCanvas } from '@/engine/mapDiagnosticRenderer'
+ import type { GridDims, MapPoint } from '@/engine/maps'
+-import type { MapImportMetadata } from '@/engine/personalContentRecords'
++import {
++  isControllerMapImport,
++  type ControllerMapImportMetadata,
++  type MapImportMetadata,
++} from '@/engine/personalContentRecords'
++import { formatActiveMaskSummary, resolveActiveMask } from '@/engine/maps/activeMask'
+ import { useCameraStore } from '@/store/cameraStore'
+ import {
+   defaultPixelCountForDim,
+@@ -209,6 +214,14 @@ export function MapContextPane() {
+     () => (context ? mapFacts(context.points, context.dim, context.gridDims) : null),
+     [context],
+   )
++  const importMetadata = context?.importMetadata
++  const controllerImport: ControllerMapImportMetadata | null = isControllerMapImport(importMetadata) ? importMetadata : null
++  const activeMask = useMemo(
++    () => (context && context.countMode === 'baked'
++      ? resolveActiveMask(context.importMetadata, context.points.length)
++      : { status: 'none' as const }),
++    [context],
++  )
+   const patternUsers = useMemo(
+     () => (context ? explicitPatternMapUsers(userPatterns, context.id) : []),
+     [context, userPatterns],
+@@ -392,19 +405,25 @@ export function MapContextPane() {
+             <FactRow label="bounds" value={facts.bounds} />
+             <FactRow
+               label="source"
+-              value={context.importMetadata ? 'controller import' : context.readOnly ? 'stock' : 'custom'}
++              value={controllerImport ? 'controller import' : context.readOnly ? 'stock' : 'custom'}
+             />
++            {activeMask.status === 'ok' && (
++              <FactRow label="Maske" value={formatActiveMaskSummary(activeMask.mask.active, activeMask.mask.masked)} />
++            )}
++            {activeMask.status === 'invalid' && (
++              <div className="py-1.5 text-[11px] text-amber-400" data-testid="map-active-mask-warning">{activeMask.warning}</div>
++            )}
+           </div>
+         )}
+ 
+-        {context.importMetadata && (
++        {controllerImport && (
+           <>
+             <SectionTitle icon={<MapIcon size={12} aria-hidden />}>Imported</SectionTitle>
+             <div className="mt-1">
+-              <FactRow label="device" value={context.importMetadata.controllerName} />
+-              {context.importMetadata.ip && <FactRow label="last IP" value={context.importMetadata.ip} />}
+-              {context.importMetadata.deviceId && <FactRow label="device ID" value={context.importMetadata.deviceId} />}
+-              <FactRow label="imported" value={formatImportDate(context.importMetadata.importedAt)} />
++              <FactRow label="device" value={controllerImport.controllerName} />
++              {controllerImport.ip && <FactRow label="last IP" value={controllerImport.ip} />}
++              {controllerImport.deviceId && <FactRow label="device ID" value={controllerImport.deviceId} />}
++              <FactRow label="imported" value={formatImportDate(controllerImport.importedAt)} />
+               <FactRow label="normalization" value="device fill" />
+             </div>
+           </>
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index f6a55495..7ac43136 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -26,6 +26,7 @@ import { clampPixelCount, advanceAutoOrbit, type OrbitCamera } from '@/engine/ca
+ import { cappedPreviewPixelCount } from '@/engine/previewPixelCount'
+ import { layoutSource as buildLayoutSource } from '@/store/mapStore'
+ import { resolveLayout, type ResolvedLayout } from '@/engine/layout'
++import { activeIndices, compactPacked, formatActiveMaskSummary } from '@/engine/maps/activeMask'
+ import { resolvePole, type ShapeId } from '@/engine/shapes'
+ import { OrbitControls } from '@/components/OrbitControls'
+ import { LIBRARIES } from '@/pixelblaze/libs'
+@@ -259,6 +260,13 @@ export function Preview({
+       useEditorStore.getState().setDisplayDim(layout.displayDim)
+       useEditorStore.getState().setMapDim(layout.mapDim)
+       useEditorStore.getState().setLayoutLabel(layout.layoutLabel)
++      useEditorStore.getState().setActiveMaskLabel(
++        layout.activeMaskSummary
++          ? { text: formatActiveMaskSummary(layout.activeMaskSummary.active, layout.activeMaskSummary.masked), warning: false }
++          : layout.activeMaskWarning
++            ? { text: layout.activeMaskWarning, warning: true }
++            : null,
++      )
+       // A normal array is fed exactly for a solid-eligible embedding (Pole, Cylinder,
+       // Sphere shell, Cube shell), so its presence IS the eligibility the deck's
+       // solidity slider keys on.
+@@ -281,9 +289,16 @@ export function Preview({
+       // Split the draw channel back into the prior locals so the renderer wiring
+       // below is unchanged: the 3D channel carries positions + (solid-eligible)
+       // normals; the 2D channel a single pos list.
+-      const positions3D = draw.kind === '3d' ? draw.positions : null
+-      const normals3D = draw.kind === '3d' ? draw.normals : null
+-      const shapePositions = draw.kind === '2d' ? draw.positions : null
++      // Active mask: masked pixels (no real LED position) are not drawn at all —
++      // the renderer only gets the active indices, so the parked cluster
++      // vanishes and does not skew the measured bounds/spacing. The router
++      // frame keeps every index (masked ones black, see renderLoop).
++      const drawIndices = layout.activeMask ? activeIndices(layout.activeMask) : null
++      const pickDrawn = <T,>(values: T[]): T[] => (drawIndices ? Array.from(drawIndices, (i) => values[i]) : values)
++      const positions3D = draw.kind === '3d' ? pickDrawn(draw.positions) : null
++      const normals3D = draw.kind === '3d' && draw.normals ? pickDrawn(draw.normals) : null
++      const shapePositions = draw.kind === '2d' ? pickDrawn(draw.positions) : null
++      const compactFrame = drawIndices ? new Float64Array(drawIndices.length * 3) : null
+ 
+       const renderer = createRenderer(canvas, viewport)
+       rendererRef.current = renderer
+@@ -318,7 +333,7 @@ export function Preview({
+           renderer.setCamera(captureCameraRef.current ?? view.camera)
+           renderer.setZoom(view.zoom)
+         }
+-        renderer.paint(pixels, brightness, dimmed)
++        renderer.paint(drawIndices ? Array.from(drawIndices, (i) => pixels[i]) : pixels, brightness, dimmed)
+         // Dev capture: fulfil any pending request with the frame just drawn.
+         captureRef.current.afterPaint(canvasRef.current)
+       }
+@@ -330,7 +345,7 @@ export function Preview({
+               renderer.setCamera(captureCameraRef.current ?? view.camera)
+               renderer.setZoom(view.zoom)
+             }
+-            renderer.paint(frame, brightness, dimmed)
++            renderer.paint(drawIndices && compactFrame ? compactPacked(frame, drawIndices, compactFrame) : frame, brightness, dimmed)
+             captureRef.current.afterPaint(canvasRef.current)
+             externalPixelOutput.sendPacked(frame)
+           }
+@@ -339,6 +354,7 @@ export function Preview({
+       const loop = createRenderLoop({
+         handle, shim, clock,
+         mapPoints, pixelCount,
++        activeMask: layout.activeMask,
+         renderCompatibility,
+         getSpeed: () => usePreviewStore.getState().speed,
+         getBrightness: () => usePreviewStore.getState().brightness,
+@@ -511,6 +527,7 @@ export function Preview({
+         let sketchLayoutSource: ReturnType<typeof resolveFastLedSketchLayout>['source'] | null = null
+         let axes: ReturnType<typeof largestExtentAxes> | null = null
+         let litPixels = layout.pixelCount
++        if (layout.activeMask) for (let i = 0; i < layout.activeMask.length; i++) litPixels -= layout.activeMask[i] ? 0 : 1
+         if (projectionMode === 'surface') {
+           const screenMaps = host.getScreenMaps?.() ?? []
+           let example = knownExample
+@@ -527,12 +544,15 @@ export function Preview({
+             serpentine: sourceDeclaresSerpentine(previewSource),
+           })
+           const points = layout.mapPoints.map((p) => p.sample)
+-          axes = layout.mapDim === 3 ? (projectionSettings.axes ?? largestExtentAxes(points)) : 'xy'
++          // Masked map pixels (active mask) stay black and do not count
++          // towards the fit bounds or the axis choice.
++          axes = layout.mapDim === 3 ? (projectionSettings.axes ?? largestExtentAxes(points, layout.activeMask)) : 'xy'
+           projection = cachedFastLedProjectionTable(points, sketchLayout, {
+             fit: projectionSettings.fit,
+             flipX: projectionSettings.flipX,
+             flipY: projectionSettings.flipY,
+             axes,
++            active: layout.activeMask,
+           })
+           litPixels = 0
+           for (let i = 0; i < projection.length; i++) if (projection[i] >= 0) litPixels++
+diff --git a/src/components/PreviewDeck.test.tsx b/src/components/PreviewDeck.test.tsx
+index a88567c9..be8514b3 100644
+--- a/src/components/PreviewDeck.test.tsx
++++ b/src/components/PreviewDeck.test.tsx
+@@ -387,6 +387,19 @@ describe('PreviewDeck (smoke)', () => {
+     expect(screen.getByText('10×10')).toBeInTheDocument()
+   })
+ 
++  it('shows the active-mask hint of the map, and an ignored mask as a warning', () => {
++    const { rerender } = render(<PreviewDeck />)
++    expect(screen.queryByTestId('active-mask-readout')).not.toBeInTheDocument()
++
++    act(() => useEditorStore.setState({ activeMaskLabel: { text: '6.962 aktiv / 3.368 ausgeblendet', warning: false } }))
++    rerender(<PreviewDeck />)
++    expect(screen.getByTestId('active-mask-readout')).toHaveTextContent('Maske: 6.962 aktiv / 3.368 ausgeblendet')
++
++    act(() => useEditorStore.setState({ activeMaskLabel: { text: 'Maske ignoriert: 3 Einträge, Map hat 10330 Punkte', warning: true } }))
++    rerender(<PreviewDeck />)
++    expect(screen.getByTestId('active-mask-readout')).toHaveClass('text-amber-400')
++  })
++
+   it('explains an adapted map/renderer combination', () => {
+     useEditorStore.setState({
+       renderAdaptation: 'Using render3D with a 2D map; missing z is 0.5.',
+diff --git a/src/components/PreviewDeck.tsx b/src/components/PreviewDeck.tsx
+index 2e8364ba..df9512bf 100644
+--- a/src/components/PreviewDeck.tsx
++++ b/src/components/PreviewDeck.tsx
+@@ -379,6 +379,7 @@ export function PreviewViewportSection({
+   const fps = usePreviewStore((s) => s.fps)
+   const elapsed = usePreviewStore((s) => s.elapsed)
+   const layoutLabel = useEditorStore((s) => s.layoutLabel)
++  const activeMaskLabel = useEditorStore((s) => s.activeMaskLabel)
+   const solidEligible = useEditorStore((s) => s.solidEligible)
+   // FastLED Patterns always render natively (fast path); Precise 16.16 does not apply.
+   const fastLed = useEditorStore((s) => profile === 'pattern' && isFastLedSource(s.previewSource))
+@@ -484,6 +485,17 @@ export function PreviewViewportSection({
+           {layoutLabel && <DeckTelemetry label="layout" value={layoutLabel} />}
+         </DeckGrid>
+       )}
++      {pattern && activeMaskLabel && (
++        <div
++          className={`mb-[5px] truncate ${activeMaskLabel.warning ? 'text-amber-400' : 'text-zinc-400'}`}
++          title={activeMaskLabel.warning
++            ? activeMaskLabel.text
++            : 'Aktive Maske der Map: ausgeblendete Slots haben keine LED-Position und bleiben immer schwarz (Vorschau und Router).'}
++          data-testid="active-mask-readout"
++        >
++          Maske: {activeMaskLabel.text}
++        </div>
++      )}
+     </DeckSection>
+   )
+ }
+diff --git a/src/engine/fastled/fastledProjection.ts b/src/engine/fastled/fastledProjection.ts
+index 0d7a1284..a23b9b75 100644
+--- a/src/engine/fastled/fastledProjection.ts
++++ b/src/engine/fastled/fastledProjection.ts
+@@ -276,12 +276,25 @@ export function describeFastLedSketchLayout(layout: FastLedSketchLayout): string
+ 
+ const AXIS_INDEX: Record<FastLedProjectionAxes, [number, number]> = { xy: [0, 1], xz: [0, 2], yz: [1, 2] }
+ 
+-/** The two axes with the largest extent (ties keep x before y before z). */
+-export function largestExtentAxes(points: readonly (readonly number[])[]): FastLedProjectionAxes {
++/** Whether map point i is active (no mask, or past its end, = active). */
++function isActive(active: ArrayLike<number> | null | undefined, i: number): boolean {
++  return !active || i >= active.length || active[i] !== 0
++}
++
++/**
++ * The two axes with the largest extent (ties keep x before y before z).
++ * Masked points (`active[i] === 0`, see activeMask.ts) are ignored.
++ */
++export function largestExtentAxes(
++  points: readonly (readonly number[])[],
++  active?: ArrayLike<number> | null,
++): FastLedProjectionAxes {
+   const ext = [0, 0, 0]
+   const min = [Infinity, Infinity, Infinity]
+   const max = [-Infinity, -Infinity, -Infinity]
+-  for (const p of points) {
++  for (let i = 0; i < points.length; i++) {
++    if (!isActive(active, i)) continue
++    const p = points[i]
+     for (let a = 0; a < 3 && a < p.length; a++) {
+       if (p[a] < min[a]) min[a] = p[a]
+       if (p[a] > max[a]) max[a] = p[a]
+@@ -298,6 +311,12 @@ export interface FastLedProjectionTableOptions {
+   flipY: boolean
+   /** Only read for 3D points. */
+   axes: FastLedProjectionAxes
++  /**
++   * Active mask per map point (0 = no real LED): masked points map to −1
++   * (black) and are left out of the map bounds, so Contain/Fill fit only the
++   * real LED positions. Null/absent = every point active.
++   */
++  active?: ArrayLike<number> | null
+ }
+ 
+ /**
+@@ -341,11 +360,13 @@ export function buildFastLedProjectionTable(
+     const y = p.length >= 3 ? p[ay] : p.length >= 2 ? p[1] : 0
+     mx[i] = x
+     my[i] = y
++    if (!isActive(opts.active, i)) continue
+     if (x < mx0) mx0 = x
+     if (x > mx1) mx1 = x
+     if (y < my0) my0 = y
+     if (y > my1) my1 = y
+   }
++  if (mx0 === Infinity) return table // every point masked
+   const mw = mx1 - mx0, mh = my1 - my0
+   let scaleX: number, scaleY: number
+   if (opts.fit === 'fill') {
+@@ -379,6 +400,7 @@ export function buildFastLedProjectionTable(
+   }
+   const maxD2 = pitch * pitch * 1.0000001
+   for (let i = 0; i < n; i++) {
++    if (!isActive(opts.active, i)) continue
+     let u = mw > 0 ? mx[i] - mx0 : mw / 2
+     let v = mh > 0 ? my[i] - my0 : mh / 2
+     if (opts.flipX) u = mw - u
+@@ -459,7 +481,8 @@ export function cachedFastLedProjectionTable(
+ ): Int32Array {
+   let mh = 0x811c9dc5
+   for (const p of mapPoints) mh = hashNumbers(p, mh)
+-  const key = [mapPoints.length, mh, layout.ledCount, hashNumbers(layout.positions), layout.pitch, opts.fit, opts.flipX, opts.flipY, opts.axes].join('|')
++  const activeHash = opts.active ? hashNumbers(opts.active) : 0
++  const key = [mapPoints.length, mh, layout.ledCount, hashNumbers(layout.positions), layout.pitch, opts.fit, opts.flipX, opts.flipY, opts.axes, activeHash].join('|')
+   const hit = tableCache.get(key)
+   if (hit) {
+     tableCache.delete(key)
+diff --git a/src/engine/layout.ts b/src/engine/layout.ts
+index 11ef3f04..361a72cc 100644
+--- a/src/engine/layout.ts
++++ b/src/engine/layout.ts
+@@ -16,6 +16,7 @@ import type { ShapeId } from './shapes'
+ import type { SurfaceId } from './surfaces'
+ import type { CoordinateView, GeometryFamilyView, MapPoint, PixelMap, NormalizeMode, NormalRecipe, GridDims } from './maps'
+ import { cubePixelCount, applyNormalizeMode, capMapSampleEndpoints } from './maps'
++import { activeMaskForPixelCount } from './maps/activeMask'
+ import {
+   SHAPES,
+   embedPositions,
+@@ -370,6 +371,13 @@ export interface ResolvedLayout {
+   // The `cols×rows(×depth)` readout, or null for a 1D strip / irregular cloud.
+   layoutLabel: string | null
+   draw: ResolvedDraw
++  // Active mask per pixel index (1 = real LED, 0 = always black, not drawn), or
++  // null when every pixel is active. From the selected map's stored mask.
++  activeMask: Uint8Array | null
++  // Active/masked counts of the map's stored mask (deck hint), or the warning of
++  // an ignored mask; both null for a map without one.
++  activeMaskSummary: { active: number; masked: number } | null
++  activeMaskWarning: string | null
+ }
+ 
+ // Format a map's grid dims as the readout layout label (`cols×rows` or, for a
+@@ -438,6 +446,8 @@ export function resolveLayout(
+   let positions2D: [number, number][] | null = null
+   let positions3D: [number, number, number][] | null = null
+   let normals3D: [number, number, number][] | null = null
++  // The map whose stored active mask applies to this layout (if any).
++  let maskedMap: PixelMap | null
+ 
+   if (correctedSelection.shapeId) {
+     // 1D composes two independent channels: the selected map (or implicit
+@@ -447,6 +457,7 @@ export function resolveLayout(
+       correctedSelection.mapId && correctedSelection.mapId !== INDEX_MAP_ID
+         ? resolveMap(correctedSelection.mapId)
+         : null
++    maskedMap = selected1DMap
+     pixelCount = selected1DMap?.fixedPixelCount !== undefined
+       ? clampPixelCount(selected1DMap.fixedPixelCount)
+       : Math.min(
+@@ -476,6 +487,7 @@ export function resolveLayout(
+     }
+   } else {
+     const map = resolveMap(correctedSelection.mapId)
++    maskedMap = map
+     // The shared modeled count for every map branch: a stock generator
+     // carries no `baked`, so that slot drops out; the cube then squares this up.
+     const modeledCount = effectivePixelCount({
+@@ -531,5 +543,17 @@ export function resolveLayout(
+       ? { kind: '3d', positions: positions3D, normals: normals3D }
+       : { kind: '2d', positions: positions2D ?? [] }
+ 
+-  return { correctedSelection, mapPoints, pixelCount, mapDim, displayDim, layoutLabel, draw }
++  const storedMask = maskedMap?.activeMask ?? null
++  return {
++    correctedSelection,
++    mapPoints,
++    pixelCount,
++    mapDim,
++    displayDim,
++    layoutLabel,
++    draw,
++    activeMask: activeMaskForPixelCount(storedMask, pixelCount),
++    activeMaskSummary: storedMask ? { active: storedMask.active, masked: storedMask.masked } : null,
++    activeMaskWarning: maskedMap?.activeMaskWarning ?? null,
++  }
+ }
+diff --git a/src/engine/maps/activeMask.test.ts b/src/engine/maps/activeMask.test.ts
+new file mode 100644
+index 00000000..8b77636d
+--- /dev/null
++++ b/src/engine/maps/activeMask.test.ts
+@@ -0,0 +1,294 @@
++import { describe, expect, it, vi } from 'vitest'
++import {
++  activeIndices,
++  activeMaskFingerprint,
++  activeMaskForPixelCount,
++  blackMaskedPacked,
++  compactPacked,
++  decodeActiveMask,
++  encodeActiveMask,
++  formatActiveMaskSummary,
++  resolveActiveMask,
++} from './activeMask'
++import { createCustomMap } from './custom'
++import { resolveLayout, type LayoutSource } from '../layout'
++import { mapFromRecord } from '@/store/mapStore'
++import type { MapRecord } from '../personalContentRecords'
++import { bundle } from '../bundle'
++import { loadPattern } from '../loadPattern'
++import { createFxShim, createShim } from '../shim'
++import { createRenderLoop } from '../renderLoop'
++import { createVirtualClock } from '../virtualClock'
++import { selectRenderCompatibility } from '../renderCompatibility'
++import { createFastLedPatternHandle, type FastLedHostLike } from '../fastled/fastledPatternHandle'
++import { buildFastLedProjectionTable, largestExtentAxes, rasterSketchLayout } from '../fastled/fastledProjection'
++
++// A small installation-like map: real LEDs on a line plus slots parked at one
++// coordinate (TD active mask = 0), as the TouchDesigner export does.
++const PARK = [0.998, 0.998]
++function installation(): { points: number[][]; bits: number[] } {
++  const points: number[][] = []
++  const bits: number[] = []
++  for (let i = 0; i < 12; i++) {
++    const parked = i % 4 === 3 || i === 0
++    points.push(parked ? [...PARK] : [i / 20, 0.25 + (i % 2) * 0.1])
++    bits.push(parked ? 0 : 1)
++  }
++  return { points, bits }
++}
++
++describe('active mask encoding', () => {
++  it('round-trips a 0/1 array through rle01', () => {
++    const bits = [0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1]
++    const mask = encodeActiveMask(bits, { source: 'touchdesigner' })
++    expect(mask).toMatchObject({ version: 1, encoding: 'rle01', count: 12, first: 0, runs: [2, 3, 1, 1, 3, 2], active: 6, source: 'touchdesigner' })
++    expect(mask.fingerprint).toBe(activeMaskFingerprint(bits))
++    expect(Array.from(decodeActiveMask(mask))).toEqual(bits)
++    // JSON round trip (as stored in import_metadata_json).
++    expect(Array.from(decodeActiveMask(JSON.parse(JSON.stringify(mask))))).toEqual(bits)
++  })
++
++  it('round-trips all-active, all-masked and a large random mask', () => {
++    expect(Array.from(decodeActiveMask(encodeActiveMask([1, 1, 1])))).toEqual([1, 1, 1])
++    expect(Array.from(decodeActiveMask(encodeActiveMask([0])))).toEqual([0])
++    let seed = 7
++    const big = Array.from({ length: 10330 }, () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % 3 === 0 ? 0 : 1))
++    const mask = encodeActiveMask(big)
++    expect(mask.count).toBe(10330)
++    expect(Array.from(decodeActiveMask(mask))).toEqual(big)
++  })
++
++  it('rejects malformed masks', () => {
++    const good = encodeActiveMask([1, 0, 1])
++    expect(() => decodeActiveMask({ ...good, runs: [1, 1] })).toThrow(/cover 2 of 3/)
++    expect(() => decodeActiveMask({ ...good, runs: [1, 3] })).toThrow(/exceed/)
++    expect(() => decodeActiveMask({ ...good, runs: [1, 0, 2] })).toThrow(/positive/)
++    expect(() => decodeActiveMask({ ...good, fingerprint: 'fnv1a32:00000000' })).toThrow(/fingerprint/)
++    expect(() => decodeActiveMask({ ...good, active: 3 })).toThrow(/active/)
++    expect(() => decodeActiveMask({ ...good, encoding: 'bits' as 'rle01' })).toThrow(/encoding/)
++  })
++
++  it('ignores a mask whose length differs from the map (visible warning)', () => {
++    const mask = encodeActiveMask([1, 0, 1])
++    const result = resolveActiveMask({ activeMask: mask }, 4)
++    expect(result).toEqual({ status: 'invalid', warning: 'Maske ignoriert: 3 Einträge, Map hat 4 Punkte' })
++    expect(resolveActiveMask({ activeMask: mask }, 3)).toMatchObject({ status: 'ok', mask: { active: 2, masked: 1 } })
++    expect(resolveActiveMask(undefined, 3)).toEqual({ status: 'none' })
++    expect(resolveActiveMask({ activeMask: { nope: true } }, 3).status).toBe('invalid')
++  })
++
++  it('formats the deck hint with German digit grouping', () => {
++    expect(formatActiveMaskSummary(6962, 3368)).toBe('6.962 aktiv / 3.368 ausgeblendet')
++    expect(formatActiveMaskSummary(12, 0)).toBe('12 aktiv / 0 ausgeblendet')
++  })
++})
++
++describe('active mask on maps and layouts', () => {
++  const source: LayoutSource = { shapes: [], surfaces: [], maps: [] }
++  const resolveFor = (map: ReturnType<typeof createCustomMap>) =>
++    resolveLayout(
++      {
++        selection: { mapId: map.id },
++        nativeDim: 2,
++        source: { ...source, maps: [{ id: map.id, name: map.name, dim: map.dim }] },
++        persistedCount: null,
++        normalizeMode: 'contain',
++        poleCols: null,
++        shapeDefaultCount: 100,
++      },
++      { resolveMap: () => map, defaultCountForDim: () => 100 },
++    )
++
++  it('a map record carries its mask into the resolved layout', () => {
++    const { points, bits } = installation()
++    const record: MapRecord = {
++      id: 'inst', name: 'Inst', dim: 2, generator: 'custom', params: {}, points,
++      source: JSON.stringify(points), updatedAt: 1,
++      importMetadata: { kind: 'installation', activeMask: encodeActiveMask(bits, { source: 'touchdesigner' }) },
++    }
++    const layout = resolveFor(mapFromRecord(record))
++    expect(layout.pixelCount).toBe(12)
++    expect(Array.from(layout.activeMask!)).toEqual(bits)
++    expect(layout.activeMaskSummary).toEqual({ active: 8, masked: 4 })
++    expect(layout.activeMaskWarning).toBeNull()
++  })
++
++  it('an invalid-length mask is ignored with a warning; every pixel stays active', () => {
++    const { points } = installation()
++    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
++    const record: MapRecord = {
++      id: 'inst', name: 'Inst', dim: 2, generator: 'custom', params: {}, points,
++      source: JSON.stringify(points), updatedAt: 1,
++      importMetadata: { kind: 'installation', activeMask: encodeActiveMask([1, 0, 1]) },
++    }
++    const layout = resolveFor(mapFromRecord(record))
++    expect(layout.activeMask).toBeNull()
++    expect(layout.activeMaskSummary).toBeNull()
++    expect(layout.activeMaskWarning).toBe('Maske ignoriert: 3 Einträge, Map hat 12 Punkte')
++    expect(warn).toHaveBeenCalled()
++    warn.mockRestore()
++  })
++
++  it('pads the per-pixel mask as active past the baked array, and drops an all-active mask', () => {
++    const mask = resolveActiveMask({ activeMask: encodeActiveMask([1, 0]) }, 2)
++    if (mask.status !== 'ok') throw new Error('expected ok')
++    expect(Array.from(activeMaskForPixelCount(mask.mask, 4)!)).toEqual([1, 0, 1, 1])
++    expect(activeMaskForPixelCount(mask.mask, 1)).toBeNull()
++  })
++
++  it('compacts packed frames to the drawn (active) indices', () => {
++    const indices = activeIndices(Uint8Array.from([1, 0, 1]))
++    expect(Array.from(indices)).toEqual([0, 2])
++    const frame = Float64Array.from([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
++    expect(Array.from(compactPacked(frame, indices, new Float64Array(6)))).toEqual([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
++    blackMaskedPacked(frame, Uint8Array.from([1, 0, 1]))
++    expect(Array.from(frame)).toEqual([0.1, 0.2, 0.3, 0, 0, 0, 0.7, 0.8, 0.9])
++  })
++})
++
++// Output blacking: render functions still run for every index; only the
++// emitted bytes of masked indices become 0, unmasked bytes are unchanged.
++describe('active mask output blacking', () => {
++  const { points, bits } = installation()
++  const n = points.length
++  const mask = Uint8Array.from(bits)
++  const mapPoints = points.map((p) => ({ sample: p, pos: p as [number, number] }))
++
++  function captureFrames(make: () => Parameters<typeof createRenderLoop>[0], frames: number): Uint8Array[] {
++    const out: Uint8Array[] = []
++    const cfg = make()
++    const loop = createRenderLoop({
++      ...cfg,
++      paint: () => { throw new Error('packed path expected') },
++      paintPacked: (frame) => { out.push(Uint8Array.from(frame, (v) => Math.round(v * 255))) },
++    })
++    loop.renderPreviewFrame()
++    for (let f = 0; f < frames; f++) loop.tickFrame(1000 / 60)
++    return out
++  }
++
++  for (const fidelity of ['fast', 'fidelity'] as const) {
++    it(`Pixelblaze (${fidelity}): masked indices black, others byte-identical, render called for all`, () => {
++      const src = 'export function beforeRender(delta) { t1 = time(0.05) }\nexport function render2D(index, x, y) { hsv(x + t1, 1, 0.5 + y) }'
++      const { code, fxCode, metadata } = bundle(src, {})
++      const run = (activeMask: Uint8Array | null) => {
++        let renders = 0
++        const frames = captureFrames(() => {
++          const clock = createVirtualClock()
++          const cfg = { mapPoints, pixelCount: n, dimensions: 2 as const, getVirtualTime: () => clock.getTime() }
++          const shim = fidelity === 'fast' ? createShim(cfg) : createFxShim(cfg)
++          const handle = loadPattern(fidelity === 'fast' ? code : fxCode, metadata, shim.builtins)
++          const render2D = handle.render2D.bind(handle)
++          handle.render2D = (...args: Parameters<typeof render2D>) => { renders++; return render2D(...args) }
++          return {
++            handle, shim, clock, mapPoints, pixelCount: n, activeMask,
++            renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++            getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++            paint: () => {},
++          }
++        }, 5)
++        return { frames, renders }
++      }
++      const plain = run(null)
++      const masked = run(mask)
++      expect(masked.renders).toBe(plain.renders)
++      expect(masked.renders).toBe(n * 6)
++      for (let f = 0; f < plain.frames.length; f++) {
++        for (let i = 0; i < n; i++) {
++          const a = Array.from(plain.frames[f].subarray(i * 3, i * 3 + 3))
++          const b = Array.from(masked.frames[f].subarray(i * 3, i * 3 + 3))
++          expect(b).toEqual(bits[i] ? a : [0, 0, 0])
++        }
++      }
++      // The pattern actually lights masked slots without a mask.
++      expect(plain.frames[0].subarray(0, 3).some((v) => v > 0)).toBe(true)
++    })
++  }
++
++  it('FastLED (index): masked indices black, unmasked L2 bytes unchanged', () => {
++    const wire = new Uint8Array(n * 3)
++    let frameNo = 0
++    const host: FastLedHostLike = {
++      frame: (dt: number) => {
++        if (dt > 0 || frameNo === 0) {
++          frameNo++
++          for (let i = 0; i < n; i++) wire.set([(frameNo * 29 + i * 3 + 1) & 255, 255 - i, (frameNo + i * 11 + 1) & 255], i * 3)
++        }
++        return { status: 0 }
++      },
++      getLeds: () => wire,
++      getWire: () => wire,
++      ledCount: () => n,
++      getUi: () => [],
++      setUi: () => true,
++      millis: () => frameNo * 16,
++      showCount: () => frameNo,
++    }
++    const clock = createVirtualClock()
++    const shim = createShim({ mapPoints, pixelCount: n, dimensions: 2, getVirtualTime: () => clock.getTime() })
++    const { handle, metadata } = createFastLedPatternHandle({
++      host, rgb: shim.builtins.rgb as (r: number, g: number, b: number) => void, output: 'wire', controls: [],
++    })
++    const frames: Uint8Array[] = []
++    const expected: Uint8Array[] = []
++    const loop = createRenderLoop({
++      handle, shim, clock, mapPoints, pixelCount: n, activeMask: mask,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++      paint: () => { throw new Error('packed path expected') },
++      paintPacked: (frame) => {
++        frames.push(Uint8Array.from(frame, (v) => Math.round(v * 255)))
++        expected.push(Uint8Array.from(wire))
++      },
++    })
++    loop.renderPreviewFrame()
++    for (let f = 0; f < 4; f++) loop.tickFrame(1000 / 60)
++    expect(frames.length).toBe(5)
++    for (let f = 0; f < frames.length; f++) {
++      for (let i = 0; i < n; i++) {
++        const got = Array.from(frames[f].subarray(i * 3, i * 3 + 3))
++        expect(got).toEqual(bits[i] ? Array.from(expected[f].subarray(i * 3, i * 3 + 3)) : [0, 0, 0])
++      }
++    }
++  })
++
++  it('the unpacked paint path blacks masked pixels too', () => {
++    const clock = createVirtualClock()
++    const shim = createShim({ mapPoints, pixelCount: n, dimensions: 2, getVirtualTime: () => clock.getTime() })
++    const { code, metadata } = bundle('export function render2D(index, x, y) { rgb(1, 0.5, 0.25) }', {})
++    const handle = loadPattern(code, metadata, shim.builtins)
++    let painted: [number, number, number][] = []
++    const loop = createRenderLoop({
++      handle, shim, clock, mapPoints, pixelCount: n, activeMask: mask,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++      paint: (pixels) => { painted = pixels },
++    })
++    loop.renderPreviewFrame()
++    expect(painted.map((p) => (p[0] > 0 ? 1 : 0))).toEqual(bits)
++  })
++})
++
++describe('FastLED surface projection with an active mask', () => {
++  it('masked points map to -1 and do not widen the fit bounds', () => {
++    const { points, bits } = installation()
++    const sketch = rasterSketchLayout(8, 8, 64)
++    const opts = { fit: 'contain' as const, flipX: false, flipY: false, axes: 'xy' as const }
++    const withMask = buildFastLedProjectionTable(points, sketch, { ...opts, active: bits })
++    // Reference: only the real LEDs, without a mask.
++    const realIdx = bits.flatMap((b, i) => (b ? [i] : []))
++    const reference = buildFastLedProjectionTable(realIdx.map((i) => points[i]), sketch, opts)
++    for (let i = 0; i < points.length; i++) if (!bits[i]) expect(withMask[i]).toBe(-1)
++    realIdx.forEach((i, k) => expect(withMask[i]).toBe(reference[k]))
++    // Without the mask the parked cluster stretches the bounds: the real LEDs land elsewhere.
++    const unmasked = buildFastLedProjectionTable(points, sketch, opts)
++    expect(realIdx.some((i) => unmasked[i] !== withMask[i])).toBe(true)
++  })
++
++  it('axis choice ignores masked points', () => {
++    // Real points spread in x/z; one masked point sits far out in y.
++    const points = [[0, 0.5, 0], [1, 0.5, 0.5], [0.5, 0.5, 1], [0.5, 9, 0.5]]
++    expect(largestExtentAxes(points)).not.toBe('xz')
++    expect(largestExtentAxes(points, [1, 1, 1, 0])).toBe('xz')
++  })
++})
+diff --git a/src/engine/maps/activeMask.ts b/src/engine/maps/activeMask.ts
+new file mode 100644
+index 00000000..07e52373
+--- /dev/null
++++ b/src/engine/maps/activeMask.ts
+@@ -0,0 +1,207 @@
++// Active mask: which slots of an installation map carry a real LED position.
++//
++// An installation map exported from TouchDesigner has one slot per routed
++// channel; slots without an LED position (TD active mask = 0) are parked at one
++// coordinate. A Pattern still runs for every slot (render functions keep their
++// index semantics and determinism), but masked slots always output black, are
++// not drawn in the preview and do not count towards a FastLED surface fit.
++//
++// Stored on the map record in `importMetadata.activeMask` (no schema change):
++//
++//   { version: 1, encoding: 'rle01', count: 10330, first: 1,
++//     runs: [120, 4, 300, ...], active: 6962,
++//     source: 'touchdesigner', fingerprint: 'fnv1a32:1a2b3c4d' }
++//
++// `runs` are alternating run lengths starting with value `first` and must sum to
++// `count`. `active` and `fingerprint` (FNV-1a over the 0/1 bytes) are redundant
++// checks. A mask whose `count` differs from the map's point count is ignored
++// (all slots active) with a warning.
++
++export interface MapActiveMask {
++  version: 1
++  encoding: 'rle01'
++  /** Number of map slots the mask covers; must equal the map's point count. */
++  count: number
++  /** Value (0 or 1) of the first run. */
++  first: 0 | 1
++  /** Alternating run lengths starting with `first`; positive integers summing to `count`. */
++  runs: number[]
++  /** Number of active (1) slots. */
++  active: number
++  /** Where the mask came from, e.g. 'touchdesigner'. */
++  source?: string
++  /** `fnv1a32:<hex8>` over the decoded 0/1 bytes. */
++  fingerprint?: string
++  updatedAt?: number
++}
++
++export interface ResolvedActiveMask {
++  /** 1 = real LED position, 0 = masked (always black). Length = map point count. */
++  bits: Uint8Array
++  active: number
++  masked: number
++}
++
++export type ActiveMaskResult =
++  | { status: 'none' }
++  | { status: 'ok'; mask: ResolvedActiveMask }
++  | { status: 'invalid'; warning: string }
++
++/** FNV-1a (32 bit) over 0/1 bytes, as `fnv1a32:<hex8>`. */
++export function activeMaskFingerprint(bits: ArrayLike<number>): string {
++  let h = 0x811c9dc5
++  for (let i = 0; i < bits.length; i++) {
++    h ^= bits[i] ? 1 : 0
++    h = Math.imul(h, 0x01000193)
++  }
++  return `fnv1a32:${(h >>> 0).toString(16).padStart(8, '0')}`
++}
++
++/** Encodes a 0/1 array (any truthy value counts as 1) as an `rle01` mask. */
++export function encodeActiveMask(
++  bits: ArrayLike<number | boolean>,
++  extra: { source?: string; updatedAt?: number } = {},
++): MapActiveMask {
++  const count = bits.length
++  if (count === 0) throw new Error('active mask needs at least one slot')
++  const norm = new Uint8Array(count)
++  for (let i = 0; i < count; i++) norm[i] = bits[i] ? 1 : 0
++  const runs: number[] = []
++  let current = norm[0]
++  let length = 0
++  let active = 0
++  for (let i = 0; i < count; i++) {
++    if (norm[i]) active++
++    if (norm[i] === current) {
++      length++
++    } else {
++      runs.push(length)
++      current = norm[i]
++      length = 1
++    }
++  }
++  runs.push(length)
++  return {
++    version: 1,
++    encoding: 'rle01',
++    count,
++    first: norm[0] as 0 | 1,
++    runs,
++    active,
++    ...(extra.source ? { source: extra.source } : {}),
++    fingerprint: activeMaskFingerprint(norm),
++    ...(extra.updatedAt !== undefined ? { updatedAt: extra.updatedAt } : {}),
++  }
++}
++
++/** Decodes an `rle01` mask without checking it against a map; throws on malformed data. */
++export function decodeActiveMask(mask: MapActiveMask): Uint8Array {
++  if (!mask || typeof mask !== 'object') throw new Error('active mask is not an object')
++  if (mask.version !== 1) throw new Error(`unsupported active mask version ${String(mask.version)}`)
++  if (mask.encoding !== 'rle01') throw new Error(`unsupported active mask encoding ${String(mask.encoding)}`)
++  if (!Number.isInteger(mask.count) || mask.count <= 0) throw new Error('active mask count must be a positive integer')
++  if (mask.first !== 0 && mask.first !== 1) throw new Error('active mask first must be 0 or 1')
++  if (!Array.isArray(mask.runs) || mask.runs.length === 0) throw new Error('active mask runs are missing')
++  const bits = new Uint8Array(mask.count)
++  let offset = 0
++  let value: number = mask.first
++  for (const run of mask.runs) {
++    if (!Number.isInteger(run) || run <= 0) throw new Error('active mask runs must be positive integers')
++    if (offset + run > mask.count) throw new Error(`active mask runs exceed count ${mask.count}`)
++    if (value) bits.fill(1, offset, offset + run)
++    offset += run
++    value ^= 1
++  }
++  if (offset !== mask.count) throw new Error(`active mask runs cover ${offset} of ${mask.count} slots`)
++  if (mask.fingerprint !== undefined && mask.fingerprint !== activeMaskFingerprint(bits)) {
++    throw new Error('active mask fingerprint does not match its runs')
++  }
++  if (mask.active !== undefined) {
++    let active = 0
++    for (let i = 0; i < bits.length; i++) active += bits[i]
++    if (active !== mask.active) throw new Error(`active mask says ${mask.active} active slots, runs give ${active}`)
++  }
++  return bits
++}
++
++/**
++ * The active mask stored on a map record (`importMetadata.activeMask`), checked
++ * against the map's point count. Absent → `none`; malformed or wrong length →
++ * `invalid` with a warning (callers then treat every slot as active).
++ */
++export function resolveActiveMask(
++  metadata: { activeMask?: unknown } | null | undefined,
++  pointCount: number,
++): ActiveMaskResult {
++  const raw = metadata && typeof metadata === 'object' ? metadata.activeMask : undefined
++  if (raw === undefined || raw === null) return { status: 'none' }
++  let bits: Uint8Array
++  try {
++    bits = decodeActiveMask(raw as MapActiveMask)
++  } catch (err) {
++    return { status: 'invalid', warning: `Maske ignoriert: ${err instanceof Error ? err.message : String(err)}` }
++  }
++  if (bits.length !== pointCount) {
++    return { status: 'invalid', warning: `Maske ignoriert: ${bits.length} Einträge, Map hat ${pointCount} Punkte` }
++  }
++  let active = 0
++  for (let i = 0; i < bits.length; i++) active += bits[i]
++  return { status: 'ok', mask: { bits, active, masked: bits.length - active } }
++}
++
++/**
++ * The per-pixel mask for a resolved layout of `pixelCount` pixels: slots past the
++ * mask's end (a custom map replayed at a larger count) stay active. Null when
++ * nothing is masked.
++ */
++export function activeMaskForPixelCount(mask: ResolvedActiveMask | null | undefined, pixelCount: number): Uint8Array | null {
++  if (!mask || mask.masked === 0) return null
++  const out = new Uint8Array(pixelCount).fill(1)
++  out.set(mask.bits.subarray(0, Math.min(pixelCount, mask.bits.length)))
++  for (let i = 0; i < out.length; i++) if (out[i] === 0) return out
++  return null
++}
++
++/** "6.962 aktiv / 3.368 ausgeblendet" (German digit grouping, locale-independent). */
++export function formatActiveMaskSummary(active: number, masked: number): string {
++  return `${groupDigits(active)} aktiv / ${groupDigits(masked)} ausgeblendet`
++}
++
++function groupDigits(n: number): string {
++  return String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')
++}
++
++/** Forces masked pixels of a packed RGB frame (3 values per pixel) to black. */
++export function blackMaskedPacked(frame: Float64Array | Float32Array, mask: Uint8Array | null): void {
++  if (!mask) return
++  const n = Math.min(mask.length, Math.floor(frame.length / 3))
++  for (let i = 0; i < n; i++) {
++    if (mask[i]) continue
++    const o = i * 3
++    frame[o] = 0
++    frame[o + 1] = 0
++    frame[o + 2] = 0
++  }
++}
++
++/** Indices of active pixels (the preview draws only these). */
++export function activeIndices(mask: Uint8Array): Uint32Array {
++  let n = 0
++  for (let i = 0; i < mask.length; i++) n += mask[i] ? 1 : 0
++  const out = new Uint32Array(n)
++  let k = 0
++  for (let i = 0; i < mask.length; i++) if (mask[i]) out[k++] = i
++  return out
++}
++
++/** Copies the active pixels of a packed frame into `out` (3 values per active index). */
++export function compactPacked(frame: Float64Array, indices: Uint32Array, out: Float64Array): Float64Array {
++  for (let k = 0; k < indices.length; k++) {
++    const s = indices[k] * 3
++    const d = k * 3
++    out[d] = frame[s]
++    out[d + 1] = frame[s + 1]
++    out[d + 2] = frame[s + 2]
++  }
++  return out
++}
+diff --git a/src/engine/maps/custom.ts b/src/engine/maps/custom.ts
+index dc7fda4d..c07e4020 100644
+--- a/src/engine/maps/custom.ts
++++ b/src/engine/maps/custom.ts
+@@ -1,4 +1,5 @@
+ import type { GridDims, MapPoint, PixelMap } from './types'
++import type { ResolvedActiveMask } from './activeMask'
+ 
+ // A baked custom map: a coordinate array authored once and frozen
+ // into the record. Unlike stock generators (which regenerate live for any
+@@ -37,7 +38,16 @@ export function inferDim(points: number[][]): 1 | 2 | 3 {
+ // that many pixels, whatever count a pattern persisted earlier.
+ export function createCustomMap(
+   points: number[][],
+-  opts: { id: string; name: string; gridDims?: GridDims; fixedPixelCount?: number },
++  opts: {
++    id: string
++    name: string
++    gridDims?: GridDims
++    fixedPixelCount?: number
++    // Validated active mask (length = points.length), or the warning of an
++    // ignored one. See activeMask.ts.
++    activeMask?: ResolvedActiveMask
++    activeMaskWarning?: string
++  },
+ ): PixelMap {
+   const dim = inferDim(points)
+   // Freeze the baked array so resolve replays (never regenerates) from it.
+@@ -54,6 +64,8 @@ export function createCustomMap(
+     gridDims: () => opts.gridDims ?? null,
+     bakedCount: baked.length,
+     ...(opts.fixedPixelCount !== undefined ? { fixedPixelCount: opts.fixedPixelCount } : {}),
++    ...(opts.activeMask && opts.activeMask.bits.length === baked.length ? { activeMask: opts.activeMask } : {}),
++    ...(opts.activeMaskWarning ? { activeMaskWarning: opts.activeMaskWarning } : {}),
+     resolve(pixelCount: number): MapPoint[] {
+       const out: MapPoint[] = []
+       for (let i = 0; i < pixelCount; i++) {
+diff --git a/src/engine/maps/mapAuthoring.ts b/src/engine/maps/mapAuthoring.ts
+index df9abd69..568b495b 100644
+--- a/src/engine/maps/mapAuthoring.ts
++++ b/src/engine/maps/mapAuthoring.ts
+@@ -1,5 +1,5 @@
+ import * as acorn from 'acorn'
+-import type { MapRecord } from '../personalContentRecords'
++import { isControllerMapImport, type MapRecord } from '../personalContentRecords'
+ import { STOCK_MAP_SPECS } from '@/pixelblaze/stock/maps/stockCatalogue'
+ 
+ // The editor "map mode" authoring layer (#151). A custom map's source
+@@ -65,7 +65,7 @@ export function isDegenerateFallbackBake(
+   // The API omits an empty source from its normalized response, while a frozen
+   // Controller import intentionally has no source and carries explicit
+   // provenance. Only the former is an unusable authored-source signal.
+-  if (record.importMetadata) return false
++  if (isControllerMapImport(record.importMetadata)) return false
+   if (typeof record.source === 'string' && parseMapSource(record.source).length === 0) return false
+ 
+   const points = record.points
+diff --git a/src/engine/maps/types.ts b/src/engine/maps/types.ts
+index 7ae710b7..c06b7070 100644
+--- a/src/engine/maps/types.ts
++++ b/src/engine/maps/types.ts
+@@ -1,4 +1,5 @@
+ // The pixel-map data model.
++import type { ResolvedActiveMask } from './activeMask'
+ //
+ // A map is a pure index -> position lookup. It does NOT own how many pixels
+ // exist: `resolve` is handed the modeled `pixelCount` and returns one MapPoint
+@@ -75,6 +76,12 @@ export interface PixelMap {
+   // Unlike `bakedCount`, this is authoritative: the map cannot regenerate for a
+   // different Preview pixel count, so layout and controls must use this value.
+   fixedPixelCount?: number
++  // Active mask of an installation map (custom maps only): per baked slot,
++  // 1 = real LED position, 0 = no LED (always black, not drawn, not part of a
++  // FastLED surface fit). Absent = every slot active. `activeMaskWarning` is set
++  // when a stored mask was ignored (wrong length / malformed).
++  activeMask?: ResolvedActiveMask
++  activeMaskWarning?: string
+   // The map's integer `cols×rows(×depth)` grid at a modeled count,
+   // or null when it has no clean lattice (an irregular cloud, a 3D map). A stock
+   // grid generator derives its dims live from the count (Square squares up, Wide
+diff --git a/src/engine/personalContentRecords.ts b/src/engine/personalContentRecords.ts
+index 3ef51ed9..64a2ff2c 100644
+--- a/src/engine/personalContentRecords.ts
++++ b/src/engine/personalContentRecords.ts
+@@ -1,5 +1,6 @@
+ import type { Settings } from './settings'
+ import type { ShowLogicalRouting } from './showLogicalRouting'
++import type { MapActiveMask } from './maps/activeMask'
+ 
+ export interface PatternRecord {
+   id: string
+@@ -16,7 +17,7 @@ export interface PatternRecord {
+   settings?: Partial<Settings>
+ }
+ 
+-export interface MapImportMetadata {
++export interface ControllerMapImportMetadata {
+   kind: 'controller'
+   controllerName: string
+   deviceId?: string | null
+@@ -25,6 +26,25 @@ export interface MapImportMetadata {
+   pixelCount: number
+   importedAt: number
+   normalization: 'device-fill-normalized'
++  activeMask?: MapActiveMask
++}
++
++// Metadata on a map that is NOT a Controller import (e.g. a TouchDesigner
++// installation map): it only carries the active mask. Never makes the map
++// frozen/read-only; only `kind: 'controller'` is Controller provenance.
++export interface InstallationMapMetadata {
++  kind: 'installation'
++  source?: string
++  activeMask?: MapActiveMask
++}
++
++export type MapImportMetadata = ControllerMapImportMetadata | InstallationMapMetadata
++
++/** True only for Controller-import provenance (frozen, display-only facts). */
++export function isControllerMapImport(
++  metadata: MapImportMetadata | null | undefined,
++): metadata is ControllerMapImportMetadata {
++  return !!metadata && metadata.kind === 'controller'
+ }
+ 
+ // A persisted user map. Serializable form of a PixelMap: a generator descriptor
+diff --git a/src/engine/renderLoop.ts b/src/engine/renderLoop.ts
+index 3bdae664..ae2ca059 100644
+--- a/src/engine/renderLoop.ts
++++ b/src/engine/renderLoop.ts
+@@ -20,6 +20,11 @@ export interface RenderLoopConfig {
+   isDimmed: () => boolean
+   paint: (pixels: [number, number, number][], brightness: number, dimmed: boolean) => void
+   paintPacked?: (frame: Float64Array, brightness: number, dimmed: boolean) => void
++  // Active mask (ResolvedLayout.activeMask): pixels with 0 are still rendered
++  // (render functions run for every index, so Pattern state and determinism
++  // are unchanged) but their output is forced to black before paint /
++  // paintPacked, i.e. in the preview AND the router frame. Null = all active.
++  activeMask?: Uint8Array | null
+   onError?: (err: Error) => void
+   onFrame?: (delta: number, builtins: Record<string, unknown>, elapsedMs: number) => void
+   /**
+@@ -68,6 +73,7 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+   let fpsWindowStart: number | null = null
+   let fpsFrames = 0
+   const packedFrame = config.paintPacked ? new Float64Array(pixelCount * 3) : null
++  const activeMask = config.activeMask ?? null
+   const encodedIndexes = new Float64Array(pixelCount)
+   for (let index = 0; index < pixelCount; index += 1) {
+     encodedIndexes[index] = shim.encodeScalar(index)
+@@ -139,12 +145,21 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+       } else {
+         handle.render(encIndex)
+       }
++      const masked = activeMask !== null && index < activeMask.length && activeMask[index] === 0
+       if (packedFrame) {
+-        if (shouldPaint) shim.writeCapturedPixel(packedFrame, index * 3)
+-        else shim.resetCapturedPixel()
++        if (shouldPaint && !masked) shim.writeCapturedPixel(packedFrame, index * 3)
++        else {
++          shim.resetCapturedPixel()
++          if (shouldPaint) {
++            const o = index * 3
++            packedFrame[o] = 0
++            packedFrame[o + 1] = 0
++            packedFrame[o + 2] = 0
++          }
++        }
+       } else {
+         const captured = shim.capturedPixel()
+-        if (pixels) pixels.push(captured)
++        if (pixels) pixels.push(masked ? [0, 0, 0] : captured)
+       }
+     }
+ 
+diff --git a/src/engine/showModel.ts b/src/engine/showModel.ts
+index b3494a3b..c6e83c22 100644
+--- a/src/engine/showModel.ts
++++ b/src/engine/showModel.ts
+@@ -1,4 +1,5 @@
+ import { sameControllerDeviceId } from './controllerIdentity'
++import { isControllerMapImport } from './personalContentRecords'
+ import type {
+   MapRecord,
+   ShowCell,
+@@ -244,7 +245,7 @@ export function importedStageMapIdForController(
+   const displayName = controllerProfileDisplayName(controller)
+   const candidates = maps.filter((map) => {
+     const metadata = map.importMetadata
+-    if (!metadata) return false
++    if (!isControllerMapImport(metadata)) return false
+     if (controller.deviceId && sameControllerDeviceId(metadata.deviceId, controller.deviceId)) return true
+     if (controller.lastSeenIp && metadata.ip === controller.lastSeenIp) return true
+     return metadata.controllerName === displayName
+@@ -252,12 +253,16 @@ export function importedStageMapIdForController(
+   })
+   candidates.sort(
+     (a, b) =>
+-      (b.importMetadata?.importedAt ?? b.updatedAt) -
+-      (a.importMetadata?.importedAt ?? a.updatedAt),
++      importedAtOrUpdated(b) -
++      importedAtOrUpdated(a),
+   )
+   return candidates[0]?.id ?? null
+ }
+ 
++function importedAtOrUpdated(map: MapRecord): number {
++  return isControllerMapImport(map.importMetadata) ? map.importMetadata.importedAt : map.updatedAt
++}
++
+ export function showLoopDurationMs(show: Pick<ShowRecord, 'scenes' | 'transitions' | 'composition'>): number {
+   const structuralDurationMs = show.scenes.reduce((sum, scene) => (
+     sum
+diff --git a/src/store/editorStore.ts b/src/store/editorStore.ts
+index 4fae4adb..f358c251 100644
+--- a/src/store/editorStore.ts
++++ b/src/store/editorStore.ts
+@@ -66,6 +66,9 @@ interface EditorState {
+   // strip, or an irregular custom point cloud). Reflects the true geometry rather
+   // than re-deriving it from the viewport dimension.
+   layoutLabel: string | null
++  // The active map's active-mask hint for the deck ("6.962 aktiv / 3.368
++  // ausgeblendet"), or the warning of an ignored mask; null without a mask.
++  activeMaskLabel: { text: string; warning: boolean } | null
+   // Whether the active embedding is solid-eligible: it supplies a
+   // per-point normal, so the preview deck offers the solidity slider. Published
+   // by Preview from the resolved layout (true exactly when a normal array is fed
+@@ -91,6 +94,7 @@ interface EditorState {
+   setMapDim: (dim: 1 | 2 | 3) => void
+   setDisplayDim: (dim: 1 | 2 | 3) => void
+   setLayoutLabel: (label: string | null) => void
++  setActiveMaskLabel: (label: { text: string; warning: boolean } | null) => void
+   setSolidEligible: (value: boolean) => void
+   setRenderAdaptation: (description: string | null) => void
+ }
+@@ -112,6 +116,7 @@ export const editorInitialState = {
+   mapDim: 2 as 1 | 2 | 3,
+   displayDim: 2 as 1 | 2 | 3,
+   layoutLabel: null as string | null,
++  activeMaskLabel: null as { text: string; warning: boolean } | null,
+   solidEligible: false,
+   renderAdaptation: null as string | null,
+ }
+@@ -140,6 +145,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
+   setMapDim: (mapDim) => set({ mapDim }),
+   setDisplayDim: (displayDim) => set({ displayDim }),
+   setLayoutLabel: (layoutLabel) => set({ layoutLabel }),
++  setActiveMaskLabel: (activeMaskLabel) => set({ activeMaskLabel }),
+   setSolidEligible: (solidEligible) => set({ solidEligible }),
+   setRenderAdaptation: (renderAdaptation) => set({ renderAdaptation }),
+ }))
+diff --git a/src/store/mapStore.ts b/src/store/mapStore.ts
+index 45d897ef..143ad860 100644
+--- a/src/store/mapStore.ts
++++ b/src/store/mapStore.ts
+@@ -1,6 +1,7 @@
+ import { create } from 'zustand'
+ import { trackEntityCreated } from '@/analytics'
+-import type { MapRecord } from '@/engine/personalContentRecords'
++import { isControllerMapImport, type MapRecord } from '@/engine/personalContentRecords'
++import { resolveActiveMask } from '@/engine/maps/activeMask'
+ import { getPersonalContentProvider } from '@/engine/personalContentProvider'
+ import { newPersonalContentId } from '@/engine/personalContentMetadata'
+ import {
+@@ -101,11 +102,17 @@ export function mapFromRecord(r: MapRecord): PixelMap {
+     // A literal coordinate array (`[[x,y,z], ...]`) has a measured point count:
+     // lock the count to it, as stock literal maps and the Show editor already do.
+     const literal = !!r.source && r.source.trimStart().startsWith('[') && (r.points?.length ?? 0) > 0
++    // Active mask (importMetadata.activeMask): slots without a real LED
++    // position always output black. A mask of the wrong length is ignored.
++    const mask = resolveActiveMask(r.importMetadata, r.points?.length ?? 0)
++    if (mask.status === 'invalid') console.warn(`[map ${r.name}] ${mask.warning}`)
+     return createCustomMap(r.points ?? [], {
+       id: r.id,
+       name: r.name,
+       gridDims: r.gridDims,
+       ...(literal ? { fixedPixelCount: r.points!.length } : {}),
++      ...(mask.status === 'ok' ? { activeMask: mask.mask } : {}),
++      ...(mask.status === 'invalid' ? { activeMaskWarning: mask.warning } : {}),
+     })
+   }
+   return buildMap(r.id, r.name, r.generator)
+@@ -402,7 +409,7 @@ export const useMapStore = create<MapState>()((set, get) => ({
+     // D1 normalization omits empty source. Only explicit Controller-import
+     // provenance makes a source-less map frozen; other source-less records open
+     // as an empty editable draft so their persisted fallback can be repaired.
+-    if (typeof record.source === 'string' || !record.importMetadata) {
++    if (typeof record.source === 'string' || !isControllerMapImport(record.importMetadata)) {
+       const source = record.source ?? ''
+       enterMapMode(source)
+       set({
+@@ -475,7 +482,7 @@ export const useMapStore = create<MapState>()((set, get) => ({
+     const id = editingMap.id
+     const source = useEditorStore.getState().source
+     const existing = get().userMaps.find((m) => m.id === id)
+-    if (!existing || (typeof existing.source !== 'string' && existing.importMetadata)) return
++    if (!existing || (typeof existing.source !== 'string' && isControllerMapImport(existing.importMetadata))) return
+     if (existing?.source === source && existing.points && existing.points.length > 0) {
+       // Unchanged from the persisted record. Clear a stale eval banner unless
+       // this exact source is the one that failed eval — its persist succeeded,
+-- 
+2.55.0.windows.3
+

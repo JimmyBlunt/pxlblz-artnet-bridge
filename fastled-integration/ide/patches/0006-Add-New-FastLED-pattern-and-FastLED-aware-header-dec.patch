@@ -1,7 +1,7 @@
 From 637186e35a6a6ac9c10ffeb062e68f417b719eb7 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 01:15:39 +1000
-Subject: [PATCH 06/13] Add "New FastLED pattern" and FastLED-aware header,
+Subject: [PATCH 06/14] Add "New FastLED pattern" and FastLED-aware header,
  deck, lens (local #9002)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
