@@ -1,7 +1,7 @@
 From 305b2405baeb45159c5303966ee6d13b3019aa1a Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 21:30:25 +1000
-Subject: [PATCH 11/15] FastLED preview: no cached compiler OOM, no compile for
+Subject: [PATCH 11/16] FastLED preview: no cached compiler OOM, no compile for
  a stale map size (local #9002)
 
 - fastledStore: a failure of the compile machine itself (out of memory,

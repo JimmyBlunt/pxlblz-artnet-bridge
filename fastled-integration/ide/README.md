@@ -6,7 +6,7 @@ den Art-Net/Fadecandy-Router. Sie liegen auf dem Art-Net-Stand (`pxlblz-artnet-o
 Pixel-Ausgabe) auf; ohne ihn bricht das Skript ab.
 
 ```
-patches/0001-…0015-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
+patches/0001-…0016-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
 install-fastled-ide.ps1        spielt sie per git am --3way ein (idempotent)
 ```
 
@@ -38,6 +38,9 @@ powershell -ExecutionPolicy Bypass -File .\install-fastled-ide.ps1 -IdePath E:\P
 - Deck-Abschnitt **Ausgabe** (jedes Pattern): Helligkeit, Speed, Hue, Scale, Rotate wirken auf Vorschau
   und Router, pro Pattern gespeichert. Neutral (100 %, 1×, 0°, 1×, 0°) = bit-exakt; sonst Hinweis
   „Ausgabe verändert“. Der Sonnen-Regler oben ist nur Monitor-Helligkeit.
+  **Rand** bestimmt, was erscheint, wo Scale/Rotate über die Fläche hinaus abtasten: Pixelblaze
+  frei (Standard, wie ein Shader) / spiegeln / wiederholen / strecken; FastLED-Fläche spiegeln
+  (Standard) / wiederholen / strecken / schwarz. So füllt ein verkleinertes Bild die ganze Fläche.
 - Nie an einen Pixelblaze gesendet, nicht in Shows, nicht in der Agent-Discovery, kein .epe-Download.
 
 ## Nachziehen nach einem Upstream-Update der IDE

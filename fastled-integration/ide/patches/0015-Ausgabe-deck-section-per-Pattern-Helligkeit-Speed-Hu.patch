@@ -1,7 +1,7 @@
 From c47575b59b828171f6f8355e827d1f138975ade6 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Mon, 5 Oct 2026 21:14:23 +1100
-Subject: [PATCH 15/15] Ausgabe deck section: per-Pattern Helligkeit, Speed,
+Subject: [PATCH 15/16] Ausgabe deck section: per-Pattern Helligkeit, Speed,
  Hue, Scale, Rotate that reach the router (local #9002)
 
 Every Pattern (Pixelblaze and FastLED) gets a deck section "Ausgabe" whose
