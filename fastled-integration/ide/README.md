@@ -6,11 +6,11 @@ den Art-Net/Fadecandy-Router. Sie liegen auf dem Art-Net-Stand (`pxlblz-artnet-o
 Pixel-Ausgabe) auf; ohne ihn bricht das Skript ab.
 
 ```
-patches/0001-…0012-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
+patches/0001-…0013-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
 install-fastled-ide.ps1        spielt sie per git am --3way ein (idempotent)
 ```
 
-Stand der Serie: IDE `feature/fastled` @ c3784d35, Basis `pxlblz-artnet-output` @ 071002e9
+Stand der Serie: IDE `feature/fastled` @ c7fca3d0, Basis `pxlblz-artnet-output` @ 071002e9
 (= upstream 21b764ab + 2 lokale Art-Net-Commits). Host-ABI der wasm-Engine: 1.
 
 ## Einspielen

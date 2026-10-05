@@ -1,7 +1,7 @@
 From 63440de62e60cd8e0432027a36efbf9305a4f2f7 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 21:23:11 +1000
-Subject: [PATCH 09/12] FastLED example catalogue and multi-file FastLED
+Subject: [PATCH 09/13] FastLED example catalogue and multi-file FastLED
  Patterns (local #9002)
 
 Catalogue (all 114 official FastLED examples, FastLED 3.10.5 @ ec0a0f35):
