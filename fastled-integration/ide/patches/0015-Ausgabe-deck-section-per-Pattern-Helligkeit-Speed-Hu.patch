@@ -1,0 +1,2123 @@
+From c47575b59b828171f6f8355e827d1f138975ade6 Mon Sep 17 00:00:00 2001
+From: JimmyBlunt <jo@paso-music.de>
+Date: Mon, 5 Oct 2026 21:14:23 +1100
+Subject: [PATCH 15/15] Ausgabe deck section: per-Pattern Helligkeit, Speed,
+ Hue, Scale, Rotate that reach the router (local #9002)
+
+Every Pattern (Pixelblaze and FastLED) gets a deck section "Ausgabe" whose
+values act on the frame the router receives as well as the preview:
+Helligkeit and Hue adjust the finished RGB frame (before the active mask),
+Speed is the one time factor (Pixelblaze delta and the FastLED virtual
+clock; the Preview speed dropdown is gone), Scale/Rotate move the sampled
+map coordinates (Pixelblaze) or the FastLED surface projection's fit
+(greyed out for the index projection). The sun slider stays a monitor-only
+brightness. Neutral values are bit-identical (Fast/Precise, FastLED L1/L2).
+
+Values are per-pattern cascaded settings (PatternRecord.settings or
+demoOverrides), seeded before the first router frame, and a demo's router
+frames wait for its persisted overrides. Zuruecksetzen drops just the five
+fields. Nothing reaches a Controller push.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CONTEXT.md                                    |   8 +-
+ docs/reference/PXLBLZ Technical Reference.md  |   1 +
+ src/components/CompactBrightness.tsx          |   6 +-
+ src/components/DeckSlider.tsx                 |   8 +-
+ src/components/OutputPanel.test.tsx           |  95 +++++++
+ src/components/OutputPanel.tsx                | 171 +++++++++++
+ src/components/Preview.tsx                    |  53 +++-
+ src/components/PreviewDeck.test.tsx           |   6 +-
+ src/components/PreviewDeck.tsx                |  15 +-
+ src/components/SpeedSelector.test.tsx         |  16 --
+ src/components/SpeedSelector.tsx              |  35 ---
+ src/engine/fastled/fastledPatternHandle.ts    |  15 +-
+ .../fastled/fastledPatternHandle.wasm.test.ts |  25 +-
+ src/engine/fastled/fastledProjection.test.ts  |  26 ++
+ src/engine/fastled/fastledProjection.ts       |  14 +-
+ src/engine/outputAdjust.test.ts               | 138 +++++++++
+ src/engine/outputAdjust.ts                    | 268 ++++++++++++++++++
+ src/engine/previewPanel.ts                    |   3 +-
+ src/engine/renderLoop.output.test.ts          | 196 +++++++++++++
+ src/engine/renderLoop.ts                      |  49 +++-
+ src/engine/settings.test.ts                   |   4 +
+ src/engine/settings.ts                        |  17 ++
+ src/store/patternStore.ts                     |  41 ++-
+ src/store/previewStore.ts                     |  28 ++
+ src/store/settingsCascade.output.test.ts      | 172 +++++++++++
+ src/store/settingsCascade.ts                  |  80 +++++-
+ 26 files changed, 1403 insertions(+), 87 deletions(-)
+ create mode 100644 src/components/OutputPanel.test.tsx
+ create mode 100644 src/components/OutputPanel.tsx
+ delete mode 100644 src/components/SpeedSelector.test.tsx
+ delete mode 100644 src/components/SpeedSelector.tsx
+ create mode 100644 src/engine/outputAdjust.test.ts
+ create mode 100644 src/engine/outputAdjust.ts
+ create mode 100644 src/engine/renderLoop.output.test.ts
+ create mode 100644 src/store/settingsCascade.output.test.ts
+
+diff --git a/CONTEXT.md b/CONTEXT.md
+index d3bfd2e5..e13d2229 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -30,6 +30,10 @@ _Avoid_: mapping (a **Map** is the coordinate set), resampling/scaling (nothing
+ 
+ **Active mask** (local fork):
+ Per-slot flag of an installation **Map** (one entry per point, in map order): 1 = the slot has a real LED position, 0 = it has none (TouchDesigner active mask = 0; the export parks such slots at one coordinate). Every Pattern (Pixelblaze and FastLED) still runs for masked slots — render functions are called for every index — but their output is forced to black in the preview and in the router frame, they are not drawn, and they do not count towards a **FastLED projection** surface fit. Stored on the map record as `importMetadata.activeMask` (compact run-length form); a mask whose length differs from the map's point count is ignored with a warning. The deck shows "Maske: N aktiv / M ausgeblendet".
++
++**Ausgabe** (local fork):
++The per-**Pattern** output adjustment in the deck section "Ausgabe", for Pixelblaze and FastLED Patterns alike, and the only preview controls whose effect reaches the LED router: **Helligkeit** (scales the final RGB frame), **Speed** (the one time factor, 0–4×: Pixelblaze delta and the FastLED virtual clock), **Hue** (rotates the final frame's hue), **Scale** (zoom about the map centre) and **Rotate** (about the map centre in the map plane; 3D maps: the plane of their two largest extents, the same plane a **FastLED projection** surface uses). Scale/Rotate act on the coordinates a Pixelblaze Pattern samples, or on a FastLED surface projection's map→sketch fit; a FastLED index projection has nothing to zoom, so both are greyed out there. Order: render (Speed/Scale/Rotate at its input) → Hue → Helligkeit → **active mask** black → preview and router. At the neutral values (100 %, 1×, 0°, 1×, 0°) frames are bit-identical to no adjustment; any other value shows "Ausgabe verändert" (for FastLED: no longer bit-exact FastLED bytes), and "Zurücksetzen" returns to neutral. Persisted like the other per-pattern preview settings (**settings cascade** layer 1: Pattern settings, or per-demo overrides for read-only demos and **FastLED examples**) and applied before the first frame is sent. Never part of a push to a **Controller**, never in a **Show**.
++_Avoid_: calling the sun slider (preview brightness, a monitor-only control) the LED brightness; confusing Ausgabe Speed with a Pattern's own speed Control.
+ _Avoid_: hiding pixels (they still exist, keep their index and are routed — just always black); calling the mask a Map or a route filter.
+ 
+ **FastLED compile service**:
+@@ -101,7 +105,7 @@ The connection-owned fact produced by one raw `/pixelmap.dat` round trip for one
+ _Avoid_: treating the most recent map push as proof of what firmware installed; calling a failed read an absent map; persisting the raw map blob in the profile.
+ 
+ **Send to Controller** (the push action):
+-The grouped Controller identity plus direct **Run** and **Save** actions that send the open **Pattern** or compiled **Show** to one Controller. **Run** is transient and does not enter Saved Patterns; **Save** persists and activates the artifact. The actions are enabled only when a Controller is connected and the artifact compiles cleanly, with cross-dimensional renderer adaptation, firmware warnings, and known incompatibility surfaced before send. Pattern sends use the normal bundled artifact or a pass-engine derivative from the active **Controller profile**. Show sends preserve the canonical Show provenance and output contract while applying any required Controller derivative. The dirty gate tracks each source and Controller-affecting derivative independently for Run and Save. A clean Run remains inert only while the Controller is known to be running that exact transient artifact; observing another active Pattern re-arms Run without requiring a source edit. Save cleanliness is independent of the active Pattern. *Nothing from Pattern preview presentation rides along*: not its selected map, brightness, fit (Fill/Contain), pixel count, speed, light size, diffusion, solidity, fidelity, layout, or live control values. Source changes still require a deliberate user push. A separately authorized Controller-profile reconciler may refresh only **managed saved artifacts** after code-affecting hardware settings change. **Save** uses overwrite-in-place: the IDE remembers a per-Controller binding from Pattern, demo, or Show identity to the Controller-assigned id, so repeated saves update one stored program rather than piling up copies. **Run** uses throwaway ids and does not affect that binding. Control values are tuned live afterward in the **Controller panel**.
++The grouped Controller identity plus direct **Run** and **Save** actions that send the open **Pattern** or compiled **Show** to one Controller. **Run** is transient and does not enter Saved Patterns; **Save** persists and activates the artifact. The actions are enabled only when a Controller is connected and the artifact compiles cleanly, with cross-dimensional renderer adaptation, firmware warnings, and known incompatibility surfaced before send. Pattern sends use the normal bundled artifact or a pass-engine derivative from the active **Controller profile**. Show sends preserve the canonical Show provenance and output contract while applying any required Controller derivative. The dirty gate tracks each source and Controller-affecting derivative independently for Run and Save. A clean Run remains inert only while the Controller is known to be running that exact transient artifact; observing another active Pattern re-arms Run without requiring a source edit. Save cleanliness is independent of the active Pattern. *Nothing from Pattern preview presentation rides along*: not its selected map, brightness, fit (Fill/Contain), pixel count, speed, light size, diffusion, solidity, fidelity, layout, **Ausgabe** values, or live control values. Source changes still require a deliberate user push. A separately authorized Controller-profile reconciler may refresh only **managed saved artifacts** after code-affecting hardware settings change. **Save** uses overwrite-in-place: the IDE remembers a per-Controller binding from Pattern, demo, or Show identity to the Controller-assigned id, so repeated saves update one stored program rather than piling up copies. **Run** uses throwaway ids and does not affect that binding. Control values are tuned live afterward in the **Controller panel**.
+ _Avoid_: "deploy" or "upload" as the canonical verb (the verb is push / Send to Controller).
+ 
+ **Push record**:
+@@ -387,7 +391,7 @@ A purely **IDE-side**, preview-only table of the settings a curated pattern (a *
+ _Avoid_: baking the association into pattern source or a `//@map` comment (would pollute the artifact); "required map" / "bound map" (it is only a default, never a constraint); treating the old three separate registries as distinct concepts (one table now).
+ 
+ **Settings cascade**:
+-How every tunable preview setting resolves to an effective value: four layers, first hit wins, top-down — **per-pattern override** → **recommended** (curated patterns only) → user **global-sticky** (comfort prefs only) → **developer default**. Per-pattern overrides are **sparse** (`Partial`) and written *only* on genuine user manipulation of a control (never inferred from a stored value equalling a default — those are indistinguishable). Field partition: **per-pattern cascaded** (`mapId`, `shapeId`/`surfaceId`, `pixelCount`, `solidity`, `normalize`, `brightness`, `speed`); **hybrid comfort prefs** (`lightSize`, `diffusion` — global-sticky baseline *and* per-pattern overridable); **pure global** (`fidelity` — one sticky value, never cascaded). Layer-1 overrides live on `PatternRecord.settings` for a user pattern and in `patternStore.demoOverrides` (keyed by demo name) for a demo — both persist and seed identically. **Forking** a demo snapshots its *effective* settings into the new record as explicit overrides (a frozen copy, no live pointer back). **Resetting** clears whichever layer-1 bag is active — a demo **reverts to recommended**, a user pattern **resets to app defaults** (global-sticky comfort prefs are read, not cleared) — surfaced as a rewind icon by the Preview header that appears only when overrides exist.
++How every tunable preview setting resolves to an effective value: four layers, first hit wins, top-down — **per-pattern override** → **recommended** (curated patterns only) → user **global-sticky** (comfort prefs only) → **developer default**. Per-pattern overrides are **sparse** (`Partial`) and written *only* on genuine user manipulation of a control (never inferred from a stored value equalling a default — those are indistinguishable). Field partition: **per-pattern cascaded** (`mapId`, `shapeId`/`surfaceId`, `pixelCount`, `solidity`, `normalize`, `brightness`, `speed`, and the local fork's **Ausgabe** fields `outputBrightness`, `outputHue`, `outputScale`, `outputRotate`); **hybrid comfort prefs** (`lightSize`, `diffusion` — global-sticky baseline *and* per-pattern overridable); **pure global** (`fidelity` — one sticky value, never cascaded). Layer-1 overrides live on `PatternRecord.settings` for a user pattern and in `patternStore.demoOverrides` (keyed by demo name) for a demo — both persist and seed identically. **Forking** a demo snapshots its *effective* settings into the new record as explicit overrides (a frozen copy, no live pointer back). **Resetting** clears whichever layer-1 bag is active — a demo **reverts to recommended**, a user pattern **resets to app defaults** (global-sticky comfort prefs are read, not cleared) — surfaced as a rewind icon by the Preview header that appears only when overrides exist.
+ _Avoid_: calling any preview setting "global, not per-pattern" as a blanket rule (only `fidelity` is purely global now).
+ 
+ **Map mode** (of the editor):
+diff --git a/docs/reference/PXLBLZ Technical Reference.md b/docs/reference/PXLBLZ Technical Reference.md
+index 2d9aff62..bdac9f12 100644
+--- a/docs/reference/PXLBLZ Technical Reference.md	
++++ b/docs/reference/PXLBLZ Technical Reference.md	
+@@ -445,6 +445,7 @@ A FastLED Pattern is detected by `patternLanguage(src)` (`src/engine/patternLang
+ - Preview: `Preview.tsx` resolves the layout with the `@pxlblz-dim` dimension, passes `PXLBLZ_NUM_LEDS` (and `PXLBLZ_WIDTH/HEIGHT` for regular grids), runs the vendored host (`src/engine/fastled/fastledWasmHost.ts`, ABI 1) in a Web Worker (`fastled.worker.ts` → `fastledWorkerCore.ts`, main side `FastLedWorkerHost`, `?fastledWorker=0` = main thread) and drives `createFastLedPatternHandle` through the shared `startLoop` (fast shim always). `beforeRender(dt)` runs `frame(dt)`; `render*(i)` emits byte/255 of L2 wire bytes (default, RGB order after brightness/correction/dither) or L1 `leds[]`. byte/255 → `Math.round(v*255)` is exact, so the packed frame and the router receive FastLED's bytes (golden test: 0 differing bytes against the native FastLED reference).
+ - Projection (`src/engine/fastled/fastledProjection.ts`, deck section "FastLED" in `FastLedProjectionPanel.tsx`): *index* keeps `leds[i]` → map index i and passes `PXLBLZ_NUM_LEDS` = map pixel count; *surface* compiles without PXLBLZ defines (the sketch keeps its NUM_LEDS) and gives the handle a precomputed table map index → sketch LED (−1 = black), so `render*(i)` emits the L2/L1 bytes of `table[i]` and the packed frame keeps the map's pixel count (router frame size unchanged). Sketch positions: the sketch's screen maps (`getScreenMaps()`, host export `pxl_screenmap_json`, sent by the worker with `started`/changed frames; serpentine/XYMap already applied), else the catalogue `geometry` width×height row-major (serpentine when the source declares `kMatrixSerpentineLayout = true`/`SERPENTINE true`; a clone finds its example by the provenance header), else a square guess with a deck notice. Map positions: each pixel's `sample` (2D: x,y; 3D: chosen axis pair, default the two largest extents), fitted onto the sketch bounds padded by half an LED (Contain: uniform scale, whole map inside the sketch; Fill: per axis), optional flips; nearest sketch LED within one LED pitch via a bucket grid, ties → lower index; memoised per (map points, sketch layout, options), ~ms for 10,330 pixels. Automatic choice: surface for `@pxlblz-dim` ≥ 2 on a ≥2D map unless the source uses `PXLBLZ_NUM_LEDS/WIDTH/HEIGHT` or the known LED count (catalogue, or after start) equals the map's. Persistence: `// @pxlblz-projection [index|surface] [fit=fill] [flip=x|y|xy] [axes=xy|xz|yz]` in an editable Pattern's header; the compile request blanks that line and the artifact cache key drops it, so a projection change never recompiles. Read-only examples store the same text as `fastledProjection` in their `demoOverrides` bag (cleared by "Revert to recommended"); Clone writes it into the copy's header.
+ - Active mask (`src/engine/maps/activeMask.ts`, all Patterns, not only FastLED): a custom map record may carry `importMetadata.activeMask = { version: 1, encoding: 'rle01', count, first, runs, active, source?, fingerprint?, updatedAt? }` — alternating run lengths starting with value `first`, summing to `count`; `active` and `fingerprint` (`fnv1a32:` over the 0/1 bytes) are checked on decode. Stored in the existing `import_metadata_json` column (no migration; `PATCH /api/maps/:id` already writes `importMetadata` as a whole). A map whose metadata has no Controller provenance uses `kind: 'installation'`; only `kind: 'controller'` (`isControllerMapImport`) makes a map frozen or shows the "Imported" facts. `mapFromRecord` validates the mask against the point count (wrong length or malformed → ignored, `console.warn` and an amber deck/map-pane warning) and puts it on the `PixelMap`; `resolveLayout` returns `activeMask` (per pixel index, active past the baked array, null when nothing is masked) plus the summary. `createRenderLoop({ activeMask })` still calls `render*` for every index (Pattern state and determinism unchanged) and writes black for masked indices into the packed frame / pixel list, so preview and `externalPixelOutput` (router) get black there and unchanged bytes elsewhere. `Preview.tsx` hands the renderer only the active indices (positions, normals, and a compacted copy of each frame), so the parked cluster is neither drawn nor part of the measured bounds/spacing. The FastLED surface table gets `active`: masked points → −1 and excluded from the map bounds (Contain/Fill fit only real LED positions) and from the automatic 3D axis choice. Deck: "Maske: 6.962 aktiv / 3.368 ausgeblendet" (`editorStore.activeMaskLabel`); map pane fact row "Maske". Set/clear a mask with `node scripts/set-map-active-mask.mjs --map <id> --mask <0/1 JSON array>` (local dev session, merges with existing metadata, verifies after writing). Not applied yet: Shows, Gallery thumbnails, Controller (hardware) export.
++- Ausgabe (`src/engine/outputAdjust.ts`, deck section "Ausgabe" in `OutputPanel.tsx`, all Patterns, not only FastLED): five per-Pattern controls that reach the router. Settings fields (per-pattern cascaded, `settings.ts`): `outputBrightness` 0..1, `speed` 0..4 (the existing field; the Preview section's speed dropdown is gone, a stored value above 4 clamps to 4 on seed), `outputHue` −180..180°, `outputScale` 0.25..4, `outputRotate` −180..180°. Layer 1 lives where every other preview override lives: `PatternRecord.settings` (`settings_json`, no migration) for a personal Pattern, `demoOverrides` for a read-only demo / FastLED example; forks copy them like the rest. Chain: Speed scales the frame delta (`renderLoop` `getSpeed`: Pixelblaze `delta`/`time()` and the FastLED virtual clock, i.e. `frame(dt)` to the worker; 0 = frozen), Scale/Rotate move the map coordinates before the Pattern's own transform stack (`createRenderLoop({ getOutput })` → `transformMapCoordinates`: `c + R(−θ)·(p − c)/scale` about the bounding-box centre of the active samples, so the image turns by +θ from +x towards +y; 1D maps zoom x only and have no rotation; 3D maps rotate in the plane of the two largest extents, the plane `largestExtentAxes` gives the FastLED surface projection; for FastLED the loop leaves coordinates alone (`coordinateOutput: false`) and the surface table applies `zoom`/`rotateDeg` to the map positions before flips and fit, swapped live via the handle's `setProjection`; the index projection has no geometry, so the deck greys Scale/Rotate out), then on the finished frame Hue (HSV rotation, keeps max/min channel) → Helligkeit (multiply) → masked pixels stay black → renderer (times the preview-only monitor `brightness`) and `externalPixelOutput`. At neutral values (1, 1, 0°, 1, 0°) nothing is computed and frames are bit-identical (Pixelblaze Fast/Precise, FastLED L1/L2 goldens). The preview-only `brightness` (sun slider) stays a monitor control; it never reaches the router. Before the first frame of a newly opened Pattern, `startLoop` calls `ensureOutputSettingsSeeded()` (the open-time seed effect runs after the build effect); a demo's router frames are held back until `demoOverridesLoaded` so a persisted Helligkeit cannot flash at 100 %. "Zurücksetzen" drops the five fields from the layer-1 bag (`clearPatternSettingsFields` / `clearDemoSettingsFields`). Nothing of this is in pushed code (Send to Controller bundles the source; its JPEG thumbnail renders separately); Shows and static Gallery thumbnails ignore it.
+ - Preview start: the deck pauses itself while no Pattern is loaded (upstream #478); it now resumes when the pause was automatic and a Pattern arrives (cold load, deep link), while a user pause stays.
+ - Controls: FastLED UI elements map to ranged slider/toggle Controls (`PatternMetadata.controls[].range`); values persist in `PatternRecord.controls` (`controls_json`) keyed by UI name.
+ - Worker and watchdog: the worker runs the same host calls in the same order, so bytes are identical; frames are pipelined by one IDE frame (frame(dt_k) requests frame k while frame k-1 is shown; a late answer repeats the last frame and the deltas accumulate). No answer within 2 s (setup 10 s) terminates the worker: runtime error, last frame kept. The host's loop/show budget still reports runaway loops that call `millis/delay/show` (they keep running). Measured at 4,593 LEDs: ~1 ms per frame in the worker, ~1.4 ms round trip, main-thread cost ~0.1 ms per frame; added latency one IDE frame.
+diff --git a/src/components/CompactBrightness.tsx b/src/components/CompactBrightness.tsx
+index 5b9a569a..924c75be 100644
+--- a/src/components/CompactBrightness.tsx
++++ b/src/components/CompactBrightness.tsx
+@@ -8,15 +8,17 @@ function formatBrightness(value: number): string {
+ }
+ 
+ /** Shared presentation; each surface retains ownership of its brightness value. */
+-export function CompactBrightness({ value, onChange, ariaLabel = 'Brightness', testId, curve = 1, onSpace }: {
++export function CompactBrightness({ value, onChange, ariaLabel = 'Brightness', testId, curve = 1, onSpace, title }: {
+   value: number | null
+   onChange: (value: number) => void
+   ariaLabel?: string
+   testId?: string
+   curve?: 1 | 2
+   onSpace?: () => void
++  /** Overrides the hover text (e.g. to say the value is preview-only). */
++  title?: string
+ }) {
+-  return <div className="panel-brightness" data-testid={testId} title={value === null ? 'Brightness not set — drag to set a value.' : `Brightness ${formatBrightness(value)}`}>
++  return <div className="panel-brightness" data-testid={testId} title={title ?? (value === null ? 'Brightness not set — drag to set a value.' : `Brightness ${formatBrightness(value)}`)}>
+     <Sun size={13} aria-hidden className="text-zinc-400 shrink-0" />
+     <DeckSlider label="brightness" ariaLabel={ariaLabel} value={value} min={0} max={1} step={0.01} presentation="percentage" format={formatBrightness} curve={curve} onSpace={onSpace} onChange={onChange} />
+   </div>
+diff --git a/src/components/DeckSlider.tsx b/src/components/DeckSlider.tsx
+index ec9c6960..b0ac1c5f 100644
+--- a/src/components/DeckSlider.tsx
++++ b/src/components/DeckSlider.tsx
+@@ -20,6 +20,8 @@ export function DeckSlider({
+   curve = 1,
+   className = '',
+   unsetHint = 'Not set — drag to set a value.',
++  disabled = false,
++  title,
+ }: {
+   label: string
+   ariaLabel?: string
+@@ -50,6 +52,9 @@ export function DeckSlider({
+   /** Hover explanation for the indeterminate readout, so an unset control says
+    *  why it is unset instead of reading as a value (#873). */
+   unsetHint?: string
++  /** Greys the slider out; `title` then says why. */
++  disabled?: boolean
++  title?: string
+ }) {
+   const indeterminate = value == null
+   // With a non-linear curve the range input runs in normalized *position* space
+@@ -100,7 +105,7 @@ export function DeckSlider({
+   )
+   const valueText = indeterminate ? undefined : formatValue(value)
+   return (
+-    <label className={`flex flex-col gap-0.5 ${className}`} data-deck="slider">
++    <label className={`flex flex-col gap-0.5 ${disabled ? 'opacity-40' : ''} ${className}`} data-deck="slider" title={title}>
+       <span className="text-zinc-400 leading-tight">{label}</span>
+       <div className="flex items-center gap-2">
+         <input
+@@ -116,6 +121,7 @@ export function DeckSlider({
+           // that would imply a value) — reads as an interactive, not-yet-set control,
+           // not a disabled one. Stays enabled: dragging is how the user sets it.
+           value={sliderValue}
++          disabled={disabled}
+           onChange={(e) => handleChange(Number(e.target.value))}
+           onKeyDown={handleKeyDown}
+           onPointerUp={onSpace ? (event) => event.currentTarget.blur() : undefined}
+diff --git a/src/components/OutputPanel.test.tsx b/src/components/OutputPanel.test.tsx
+new file mode 100644
+index 00000000..459e3ffe
+--- /dev/null
++++ b/src/components/OutputPanel.test.tsx
+@@ -0,0 +1,95 @@
++import { beforeEach, describe, expect, it } from 'vitest'
++import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
++import { OutputPanel } from './OutputPanel'
++import { usePreviewStore, previewInitialState } from '@/store/previewStore'
++import { useEditorStore, editorInitialState } from '@/store/editorStore'
++import { usePatternStore, patternInitialState } from '@/store/patternStore'
++import { useMapStore, mapInitialState } from '@/store/mapStore'
++import { useFastLedProjectionStore, type FastLedProjectionStatus } from '@/store/fastledProjectionStore'
++import { usePanelPreferencesStore } from '@/store/panelPreferencesStore'
++
++const FASTLED_SRC = '// @pxlblz-language fastled\n// @pxlblz-dim 2\nvoid setup() {}\nvoid loop() {}\n'
++const status = (mode: 'index' | 'surface'): FastLedProjectionStatus => ({
++  mode, automatic: true, mapDim: 2, axes: null, layoutLabel: null, layoutSource: null, ledCount: 64, pixelCount: 100, litPixels: 100,
++})
++
++beforeEach(() => {
++  usePanelPreferencesStore.setState({ expanded: {} })
++  usePreviewStore.setState(previewInitialState)
++  useEditorStore.setState({ ...editorInitialState, mapDim: 2 })
++  usePatternStore.setState({
++    ...patternInitialState,
++    activePatternId: 'p1',
++    userPatterns: [{ id: 'p1', name: 'P1', src: '', controls: {}, updatedAt: 1 }],
++  })
++  useMapStore.setState(mapInitialState)
++  useFastLedProjectionStore.setState({ status: null })
++})
++
++describe('OutputPanel (Ausgabe)', () => {
++  it('shows the five controls at their neutral values, expanded by default, without badge', () => {
++    render(<OutputPanel mode="pattern" />)
++    expect(screen.getByRole('slider', { name: 'Ausgabe Helligkeit' })).toHaveValue('1')
++    expect(screen.getByRole('slider', { name: 'Ausgabe Speed' })).toHaveValue('1')
++    expect(screen.getByRole('slider', { name: 'Ausgabe Hue' })).toHaveValue('0')
++    expect(screen.getByRole('slider', { name: 'Ausgabe Scale' })).toHaveValue('1')
++    expect(screen.getByRole('slider', { name: 'Ausgabe Rotate' })).toHaveValue('0')
++    expect(screen.queryByTestId('output-modified')).not.toBeInTheDocument()
++    expect(screen.getByTestId('output-reset')).toBeDisabled()
++  })
++
++  it('a change goes live, persists on the Pattern and shows the badge; Zurücksetzen restores neutral', async () => {
++    render(<OutputPanel mode="pattern" />)
++    fireEvent.change(screen.getByRole('slider', { name: 'Ausgabe Helligkeit' }), { target: { value: '0.4' } })
++    fireEvent.change(screen.getByRole('slider', { name: 'Ausgabe Hue' }), { target: { value: '-30' } })
++    expect(usePreviewStore.getState().outputBrightness).toBe(0.4)
++    expect(usePreviewStore.getState().outputHue).toBe(-30)
++    expect(usePatternStore.getState().userPatterns[0].settings).toMatchObject({ outputBrightness: 0.4, outputHue: -30 })
++    expect(screen.getAllByTestId('output-modified').length).toBeGreaterThan(0)
++    expect(screen.getByTestId('output-panel')).toHaveAttribute('data-modified', 'true')
++
++    await act(async () => { fireEvent.click(screen.getByTestId('output-reset')) })
++    await waitFor(() => expect(screen.queryByTestId('output-modified')).not.toBeInTheDocument())
++    expect(usePreviewStore.getState().outputBrightness).toBe(1)
++    expect(usePreviewStore.getState().outputHue).toBe(0)
++    expect(usePatternStore.getState().userPatterns[0].settings).toEqual({})
++  })
++
++  it('Speed is the one time factor (0–4×)', () => {
++    render(<OutputPanel mode="pattern" />)
++    const speed = screen.getByRole('slider', { name: 'Ausgabe Speed' })
++    expect(speed).toHaveAttribute('max', '4')
++    fireEvent.change(speed, { target: { value: '2.5' } })
++    expect(usePreviewStore.getState().speed).toBe(2.5)
++    expect(screen.getByText('2.50×')).toBeInTheDocument()
++  })
++
++  it('FastLED index projection greys out Scale and Rotate with a reason; surface enables them', () => {
++    useEditorStore.setState({ previewSource: FASTLED_SRC })
++    useFastLedProjectionStore.setState({ status: status('index') })
++    const { rerender } = render(<OutputPanel mode="pattern" />)
++    expect(screen.getByRole('slider', { name: 'Ausgabe Scale' })).toBeDisabled()
++    expect(screen.getByRole('slider', { name: 'Ausgabe Rotate' })).toBeDisabled()
++    expect(screen.getByRole('slider', { name: 'Ausgabe Scale' }).closest('label')).toHaveAttribute('title', expect.stringContaining('Index'))
++    expect(screen.getByRole('slider', { name: 'Ausgabe Helligkeit' })).toBeEnabled()
++
++    act(() => useFastLedProjectionStore.setState({ status: status('surface') }))
++    rerender(<OutputPanel mode="pattern" />)
++    expect(screen.getByRole('slider', { name: 'Ausgabe Scale' })).toBeEnabled()
++    expect(screen.getByRole('slider', { name: 'Ausgabe Rotate' })).toBeEnabled()
++  })
++
++  it('FastLED: a modified Ausgabe says the bytes are no longer bit-exact', () => {
++    useEditorStore.setState({ previewSource: FASTLED_SRC })
++    usePreviewStore.setState({ outputBrightness: 0.5 })
++    render(<OutputPanel mode="pattern" />)
++    expect(screen.getByTestId('output-fastled-note')).toHaveTextContent('nicht mehr bit-exakt')
++  })
++
++  it('1D maps grey out Rotate only', () => {
++    useEditorStore.setState({ mapDim: 1 })
++    render(<OutputPanel mode="pattern" />)
++    expect(screen.getByRole('slider', { name: 'Ausgabe Rotate' })).toBeDisabled()
++    expect(screen.getByRole('slider', { name: 'Ausgabe Scale' })).toBeEnabled()
++  })
++})
+diff --git a/src/components/OutputPanel.tsx b/src/components/OutputPanel.tsx
+new file mode 100644
+index 00000000..08fd473a
+--- /dev/null
++++ b/src/components/OutputPanel.tsx
+@@ -0,0 +1,171 @@
++// Deck section "Ausgabe" (local fork): per-Pattern output adjustment for every
++// Pattern (Pixelblaze and FastLED). Unlike the Preview section these values
++// reach the LED router: Helligkeit/Hue adjust the final frame, Speed the time,
++// Scale/Rotate the map coordinates (Pixelblaze) or the surface projection
++// (FastLED). Persisted per Pattern through the settings cascade
++// (settingsCascade.ts); the engine side is engine/outputAdjust.ts.
++import { DeckGrid, DeckSection, DeckSectionHint } from '@/components/Deck'
++import { DeckSlider } from '@/components/DeckSlider'
++import { usePanelSection } from '@/store/panelPreferencesStore'
++import { usePreviewStore } from '@/store/previewStore'
++import { useEditorStore } from '@/store/editorStore'
++import { useFastLedProjectionStore } from '@/store/fastledProjectionStore'
++import { resetOutputSettings, writeCascadedOverride } from '@/store/settingsCascade'
++import { isFastLedSource } from '@/engine/patternLanguage'
++import { isOutputModified, OUTPUT_LIMITS } from '@/engine/outputAdjust'
++
++const HINT = (
++  <DeckSectionHint
++    heading="Ausgabe (Vorschau und LEDs)"
++    intro="Wirkt auf das Bild, das der Router bekommt, und auf die Vorschau. Wird pro Pattern gespeichert; nie an einen Controller gesendet."
++    items={[
++      ['Helligkeit', 'skaliert das fertige RGB-Bild (der Sonnen-Regler oben ist nur Monitor-Helligkeit)'],
++      ['Speed', 'Zeitfaktor des Patterns (Pixelblaze delta, FastLED-Uhr)'],
++      ['Hue', 'dreht den Farbton des fertigen Bildes'],
++      ['Scale', 'Zoom um die Map-Mitte'],
++      ['Rotate', 'Drehung um die Map-Mitte in der Map-Ebene (3D: Ebene der zwei größten Achsen)'],
++    ]}
++  />
++)
++
++const times = (v: number) => `${v.toFixed(2)}×`
++const degrees = (v: number) => `${Math.round(v)}°`
++
++export function OutputPanel({ mode }: { mode?: string }) {
++  const brightness = usePreviewStore((s) => s.outputBrightness)
++  const speed = usePreviewStore((s) => s.speed)
++  const hue = usePreviewStore((s) => s.outputHue)
++  const scale = usePreviewStore((s) => s.outputScale)
++  const rotate = usePreviewStore((s) => s.outputRotate)
++  const togglePlayback = usePreviewStore((s) => s.toggle)
++  const mapDim = useEditorStore((s) => s.mapDim)
++  const fastLed = useEditorStore((s) => isFastLedSource(s.previewSource))
++  const projectionMode = useFastLedProjectionStore((s) => s.status?.mode ?? null)
++  const [expanded, setExpanded] = usePanelSection(mode ?? 'pattern', 'Ausgabe')
++  const modified = isOutputModified({ brightness, hue, scale, rotate, speed })
++
++  // FastLED index projection: leds[i] → map pixel i has no geometry to zoom.
++  const geometryOff = fastLed && projectionMode !== 'surface'
++  const geometryReason = geometryOff
++    ? 'Bei FastLED-Projektion „Index“ ohne Wirkung (Map-Pixel i = leds[i]). Projektion „Fläche“ wählen.'
++    : undefined
++  const rotateOff = geometryOff || mapDim === 1
++  const rotateReason = geometryReason ?? (mapDim === 1 ? '1D-Map: keine Ebene zum Drehen.' : undefined)
++
++  const badge = modified ? (
++    <span
++      data-testid="output-modified"
++      className="shrink-0 rounded border border-amber-500/40 px-1 text-[10px] leading-4 text-amber-300"
++      title={fastLed ? 'Ausgabe verändert: der Router bekommt nicht mehr die bit-exakten FastLED-Bytes.' : 'Ausgabe verändert: der Router bekommt das angepasste Bild.'}
++    >
++      Ausgabe verändert
++    </span>
++  ) : null
++
++  return (
++    <DeckSection
++      label="Ausgabe"
++      hint={HINT}
++      collapsible
++      summaryRow={Boolean(mode)}
++      expanded={mode ? expanded : undefined}
++      onExpandedChange={mode ? setExpanded : undefined}
++      summary={mode ? (badge ?? <span className="text-zinc-500" data-testid="output-neutral">neutral</span>) : undefined}
++    >
++      <div data-testid="output-panel" data-modified={modified ? 'true' : 'false'}>
++        <DeckGrid className="mb-1">
++          <DeckSlider
++            label="Helligkeit"
++            ariaLabel="Ausgabe Helligkeit"
++            value={brightness}
++            min={OUTPUT_LIMITS.brightness.min}
++            max={OUTPUT_LIMITS.brightness.max}
++            step={0.01}
++            presentation="percentage"
++            onSpace={togglePlayback}
++            onChange={(v) => {
++              usePreviewStore.getState().setOutputBrightness(v)
++              writeCascadedOverride('outputBrightness', v)
++            }}
++          />
++          <DeckSlider
++            label="Speed"
++            ariaLabel="Ausgabe Speed"
++            value={speed}
++            min={OUTPUT_LIMITS.speed.min}
++            max={OUTPUT_LIMITS.speed.max}
++            step={0.05}
++            format={times}
++            onSpace={togglePlayback}
++            onChange={(v) => {
++              usePreviewStore.getState().setSpeed(v)
++              writeCascadedOverride('speed', v)
++            }}
++          />
++          <DeckSlider
++            label="Hue"
++            ariaLabel="Ausgabe Hue"
++            value={hue}
++            min={OUTPUT_LIMITS.hue.min}
++            max={OUTPUT_LIMITS.hue.max}
++            step={1}
++            format={degrees}
++            onSpace={togglePlayback}
++            onChange={(v) => {
++              usePreviewStore.getState().setOutputHue(v)
++              writeCascadedOverride('outputHue', v)
++            }}
++          />
++          <DeckSlider
++            label="Scale"
++            ariaLabel="Ausgabe Scale"
++            value={scale}
++            min={OUTPUT_LIMITS.scale.min}
++            max={OUTPUT_LIMITS.scale.max}
++            step={0.05}
++            format={times}
++            disabled={geometryOff}
++            title={geometryReason}
++            onSpace={togglePlayback}
++            onChange={(v) => {
++              usePreviewStore.getState().setOutputScale(v)
++              writeCascadedOverride('outputScale', v)
++            }}
++          />
++          <DeckSlider
++            label="Rotate"
++            ariaLabel="Ausgabe Rotate"
++            value={rotate}
++            min={OUTPUT_LIMITS.rotate.min}
++            max={OUTPUT_LIMITS.rotate.max}
++            step={1}
++            format={degrees}
++            disabled={rotateOff}
++            title={rotateReason}
++            onSpace={togglePlayback}
++            onChange={(v) => {
++              usePreviewStore.getState().setOutputRotate(v)
++              writeCascadedOverride('outputRotate', v)
++            }}
++          />
++        </DeckGrid>
++        <div className="mb-[5px] flex items-center gap-2">
++          <button
++            type="button"
++            data-testid="output-reset"
++            disabled={!modified}
++            title="Alle Ausgabe-Werte auf neutral (100 %, 1×, 0°, 1×, 0°)"
++            onClick={() => void resetOutputSettings()}
++            className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] leading-4 text-zinc-300 hover:border-zinc-500 hover:text-zinc-100 disabled:cursor-default disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-300"
++          >
++            Zurücksetzen
++          </button>
++          {badge}
++          {modified && fastLed && (
++            <span className="truncate text-[10px] text-zinc-500" data-testid="output-fastled-note">nicht mehr bit-exakt FastLED</span>
++          )}
++        </div>
++      </div>
++    </DeckSection>
++  )
++}
+diff --git a/src/components/Preview.tsx b/src/components/Preview.tsx
+index 7ac43136..8ca83105 100644
+--- a/src/components/Preview.tsx
++++ b/src/components/Preview.tsx
+@@ -11,7 +11,12 @@ import {
+   defaultPixelCountForDim,
+   resolveMap,
+ } from '@/store/mapStore'
+-import { seedActiveSettings } from '@/store/settingsCascade'
++import {
++  ensureOutputSettingsSeeded,
++  liveOutputAdjust,
++  outputSettingsReady,
++  seedActiveSettings,
++} from '@/store/settingsCascade'
+ import { useCameraStore } from '@/store/cameraStore'
+ import { createShim, createFxShim, type ShimContext } from '@/engine/shim'
+ import { loadPattern, nativeDimension, type PatternHandle } from '@/engine/loadPattern'
+@@ -100,6 +105,10 @@ export function Preview({
+   const captureCameraRef = useRef<OrbitCamera | null>(null)
+   const isRunning = usePreviewStore((s) => s.isRunning)
+   const brightness = usePreviewStore((s) => s.brightness)
++  const outputBrightness = usePreviewStore((s) => s.outputBrightness)
++  const outputHue = usePreviewStore((s) => s.outputHue)
++  const outputScale = usePreviewStore((s) => s.outputScale)
++  const outputRotate = usePreviewStore((s) => s.outputRotate)
+   const lightSize = usePreviewStore((s) => s.lightSize)
+   const diffusion = usePreviewStore((s) => s.diffusion)
+   const fidelity = usePreviewStore((s) => s.fidelity)
+@@ -282,8 +291,12 @@ export function Preview({
+       shim: ShimContext,
+       clock: VirtualClock,
+       renderCompatibility: RenderCompatibility,
++      loopOptions: { coordinateOutput?: boolean } = {},
+     ) => {
+       const { mapPoints, pixelCount, draw } = layout
++      // Ausgabe values reach the router: make sure they belong to this
++      // Pattern before its first frame (the open-time seed effect runs later).
++      ensureOutputSettingsSeeded()
+       const externalPixelOutput =
+         pixelCountCap === null ? createExternalPixelOutput(pixelCount) : null
+       // Split the draw channel back into the prior locals so the renderer wiring
+@@ -347,7 +360,9 @@ export function Preview({
+             }
+             renderer.paint(drawIndices && compactFrame ? compactPacked(frame, drawIndices, compactFrame) : frame, brightness, dimmed)
+             captureRef.current.afterPaint(canvasRef.current)
+-            externalPixelOutput.sendPacked(frame)
++            // A demo's persisted Ausgabe values are still loading: hold the
++            // router frame back rather than send it unadjusted.
++            if (outputSettingsReady()) externalPixelOutput.sendPacked(frame)
+           }
+         : undefined
+ 
+@@ -356,6 +371,8 @@ export function Preview({
+         mapPoints, pixelCount,
+         activeMask: layout.activeMask,
+         renderCompatibility,
++        getOutput: liveOutputAdjust,
++        coordinateOutput: loopOptions.coordinateOutput,
+         getSpeed: () => usePreviewStore.getState().speed,
+         getBrightness: () => usePreviewStore.getState().brightness,
+         isDimmed: () => !usePreviewStore.getState().isRunning,
+@@ -523,6 +540,7 @@ export function Preview({
+         // pixel count is the identity case: index.
+         if (plannedProjection.automatic && projectionMode === 'surface' && ledCount === layout.pixelCount) projectionMode = 'index'
+         let projection: Int32Array | null = null
++        let surfaceTable: ((scale: number, rotateDeg: number) => Int32Array) | null = null
+         let sketchLayoutLabel: string | null = null
+         let sketchLayoutSource: ReturnType<typeof resolveFastLedSketchLayout>['source'] | null = null
+         let axes: ReturnType<typeof largestExtentAxes> | null = null
+@@ -547,13 +565,20 @@ export function Preview({
+           // Masked map pixels (active mask) stay black and do not count
+           // towards the fit bounds or the axis choice.
+           axes = layout.mapDim === 3 ? (projectionSettings.axes ?? largestExtentAxes(points, layout.activeMask)) : 'xy'
+-          projection = cachedFastLedProjectionTable(points, sketchLayout, {
++          const tableAxes = axes
++          // Ausgabe Scale/Rotate zoom and turn the sampled map region.
++          ensureOutputSettingsSeeded()
++          surfaceTable = (scale: number, rotateDeg: number) => cachedFastLedProjectionTable(points, sketchLayout, {
+             fit: projectionSettings.fit,
+             flipX: projectionSettings.flipX,
+             flipY: projectionSettings.flipY,
+-            axes,
++            axes: tableAxes,
+             active: layout.activeMask,
++            zoom: scale,
++            rotateDeg,
+           })
++          const output = liveOutputAdjust()
++          projection = surfaceTable(output.scale, output.rotate)
+           litPixels = 0
+           for (let i = 0; i < projection.length; i++) if (projection[i] >= 0) litPixels++
+           sketchLayoutLabel = describeFastLedSketchLayout(sketchLayout)
+@@ -579,7 +604,7 @@ export function Preview({
+         })
+         shimRef.current = shim
+         let budgetWarned = false
+-        const { handle, metadata } = createFastLedPatternHandle({
++        const { handle, metadata, setProjection } = createFastLedPatternHandle({
+           host,
+           rgb: shim.builtins.rgb as (r: number, g: number, b: number) => void,
+           output,
+@@ -602,7 +627,21 @@ export function Preview({
+             ? (sketchLayoutSource === 'guess' ? `FastLED-Projektion: kein Raster bekannt, ${sketchLayoutLabel}. Bild kann verzerrt sein.` : null)
+             : fastLedLedCountNotice(ledCount, layout.pixelCount),
+         )
+-        stop = startLoop(layout, handle, shim, clock, renderCompatibility)
++        const stopLoop = startLoop(layout, handle, shim, clock, renderCompatibility, { coordinateOutput: false })
++        // Ausgabe Scale/Rotate on a surface projection: rebuild the table
++        // (memoised) and swap it in; the index projection ignores them.
++        const makeTable = surfaceTable
++        const unsubscribeOutput = makeTable
++          ? usePreviewStore.subscribe((state, prev) => {
++              if (state.outputScale === prev.outputScale && state.outputRotate === prev.outputRotate) return
++              setProjection(makeTable(state.outputScale, state.outputRotate))
++              if (!state.isRunning) loopRef.current?.renderPreviewFrame()
++            })
++          : null
++        stop = () => {
++          unsubscribeOutput?.()
++          stopLoop()
++        }
+       })()
+       return () => {
+         cancelled = true
+@@ -833,7 +872,7 @@ export function Preview({
+   useEffect(() => {
+     if (!rendererRef.current) return
+     if (!usePreviewStore.getState().isRunning) loopRef.current?.renderPreviewFrame()
+-  }, [brightness])
++  }, [brightness, outputBrightness, outputHue, outputScale, outputRotate])
+ 
+   // Diffusion (per-source glow): pushed into the WebGL renderer, which
+   // grows a soft glow tail around each source's solid core to merge neighbours
+diff --git a/src/components/PreviewDeck.test.tsx b/src/components/PreviewDeck.test.tsx
+index be8514b3..06166873 100644
+--- a/src/components/PreviewDeck.test.tsx
++++ b/src/components/PreviewDeck.test.tsx
+@@ -143,11 +143,13 @@ describe('PreviewDeck (smoke)', () => {
+     expect(screen.getByRole('button', { name: 'Edit pixel count' })).toBeInTheDocument()
+     expect(screen.getByRole('slider', { name: 'Brightness' })).toBeInTheDocument()
+ 
+-    // Preview section: light size, diffusion sliders + renderer, speed.
++    // Preview section: light size, diffusion sliders + renderer. Speed moved
++    // to the Ausgabe section (it reaches the router).
+     expect(screen.getByRole('slider', { name: 'Light size' })).toBeInTheDocument()
+     expect(screen.getByRole('slider', { name: 'Diffusion' })).toBeInTheDocument()
+     expect(screen.getByRole('button', { name: 'Renderer' })).toBeInTheDocument()
+-    expect(screen.getByRole('button', { name: 'Speed' })).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: 'Speed' })).not.toBeInTheDocument()
++    expect(screen.getByRole('slider', { name: 'Ausgabe Speed' })).toBeInTheDocument()
+ 
+     // Telemetry (merged in from the retired Readout section) is unconditional.
+     expect(screen.getByText('fps')).toBeInTheDocument()
+diff --git a/src/components/PreviewDeck.tsx b/src/components/PreviewDeck.tsx
+index df9512bf..f14fdb8b 100644
+--- a/src/components/PreviewDeck.tsx
++++ b/src/components/PreviewDeck.tsx
+@@ -19,13 +19,13 @@ import {
+ } from '@/store/settingsCascade'
+ import { effectivePixelCount } from '@/engine/layout'
+ import { CoordinateViewSelect, MapSelect, EmbeddingSelect, useMapSelectMeta } from '@/components/LayoutSelector'
+-import { SpeedSelector } from '@/components/SpeedSelector'
+ import { DeckSelect } from '@/components/DeckSelect'
+ import { DeckSlider } from '@/components/DeckSlider'
+ import { ControlsPanel } from '@/components/ControlsPanel'
+ import { PatternDimPills } from '@/components/DimPills'
+ import { isFastLedSource } from '@/engine/patternLanguage'
+ import { FastLedProjectionPanel } from '@/components/FastLedProjectionPanel'
++import { OutputPanel } from '@/components/OutputPanel'
+ import { Variables } from '@/components/Variables'
+ import { PixelCountPopover } from '@/components/PixelCountPopover'
+ import { previewResolutionSteps, realizedResolutionCount } from '@/engine/previewResolution'
+@@ -64,7 +64,6 @@ const PREVIEW_HINT = (
+       ['diffusion', 'soften and blend lights'],
+       ['interior opacity', 'opacity for surface maps'],
+       ['renderer', 'Fast (native float math) or Precise (hardware-accurate fixed-point)'],
+-      ['speed', 'playback rate of the preview'],
+       ['fps', 'live preview frame rate'],
+       ['elapsed', 'elapsed preview run time'],
+       ['layout', 'map grid dimensions, e.g. 16×16 — grid-shaped maps only (squares, rectangles, cubes)'],
+@@ -201,7 +200,7 @@ function PrimaryBand() {
+         </button>
+       )}
+       <EmbeddingSelect portaled />
+-      <CompactBrightness onSpace={toggle} value={brightness} onChange={v => { setBrightness(v); writeCascadedOverride('brightness', v) }} />
++      <CompactBrightness onSpace={toggle} value={brightness} title={`Monitor-Helligkeit ${Math.round(brightness * 100)} % — nur Bildschirm. LED-Helligkeit: Ausgabe → Helligkeit.`} onChange={v => { setBrightness(v); writeCascadedOverride('brightness', v) }} />
+       <button
+         aria-label={hasPattern ? (isRunning ? 'Pause' : 'Run') : 'No pattern loaded'}
+         title={hasPattern ? (isRunning ? 'Pause preview' : 'Run preview') : 'No pattern loaded'}
+@@ -354,6 +353,7 @@ function SecondaryBand({ mode }: { mode?: string }) {
+         )}
+       </PatternSection>
+       {fastLed && <FastLedProjectionPanel mode={mode} />}
++      <OutputPanel mode={mode} />
+       <PreviewViewportSection profile="pattern" mode={mode} />
+     </div>
+   )
+@@ -470,13 +470,8 @@ export function PreviewViewportSection({
+           />
+           )}
+         </DeckCell>
+-        {pattern ? (
+-          <DeckCell label="speed">
+-            <SpeedSelector portaled />
+-          </DeckCell>
+-        ) : (
+-          <DeckTelemetry label="fps" value={fps === null ? '—' : fps.toFixed(1)} />
+-        )}
++        {/* Speed lives in the Ausgabe section (it reaches the router). */}
++        {!pattern && <DeckTelemetry label="fps" value={fps === null ? '—' : fps.toFixed(1)} />}
+       </DeckGrid>
+       {pattern && (
+         <DeckGrid gapY="gap-y-[3px]" className="mb-[5px] -mt-1.5">
+diff --git a/src/components/SpeedSelector.test.tsx b/src/components/SpeedSelector.test.tsx
+deleted file mode 100644
+index 0b6423c3..00000000
+--- a/src/components/SpeedSelector.test.tsx
++++ /dev/null
+@@ -1,16 +0,0 @@
+-import { render, screen } from '@testing-library/react'
+-import { beforeEach, describe, expect, it } from 'vitest'
+-import { previewInitialState, usePreviewStore } from '@/store/previewStore'
+-import { SpeedSelector } from './SpeedSelector'
+-
+-describe('SpeedSelector', () => {
+-  beforeEach(() => {
+-    usePreviewStore.setState(previewInitialState)
+-  })
+-
+-  it('presents preview speed as a multiplier through the shared domain notation', () => {
+-    render(<SpeedSelector />)
+-
+-    expect(screen.getByRole('button', { name: 'Speed' })).toHaveTextContent('1x')
+-  })
+-})
+diff --git a/src/components/SpeedSelector.tsx b/src/components/SpeedSelector.tsx
+deleted file mode 100644
+index 86c64167..00000000
+--- a/src/components/SpeedSelector.tsx
++++ /dev/null
+@@ -1,35 +0,0 @@
+-import { usePreviewStore } from '@/store/previewStore'
+-import { writeCascadedOverride } from '@/store/settingsCascade'
+-import { DeckSelect } from '@/components/DeckSelect'
+-import { formatDomainNumber } from '@/engine/domainNumberPresentation'
+-
+-const TIME_SCALES = [0.01, 0.1, 0.5, 1, 2, 4, 10].map((value) => ({
+-  value,
+-  label: formatDomainNumber('multiplier', value, 0.01),
+-}))
+-
+-function nearestTimeScale(speed: number): number {
+-  let best = 0
+-  for (let i = 1; i < TIME_SCALES.length; i++) {
+-    if (Math.abs(TIME_SCALES[i].value - speed) < Math.abs(TIME_SCALES[best].value - speed)) best = i
+-  }
+-  return TIME_SCALES[best].value
+-}
+-
+-export function SpeedSelector({ portaled = false }: { portaled?: boolean } = {}) {
+-  const speed = usePreviewStore((s) => s.speed)
+-  const setSpeed = usePreviewStore((s) => s.setSpeed)
+-
+-  return (
+-    <DeckSelect
+-      ariaLabel="Speed"
+-      value={nearestTimeScale(speed)}
+-      options={TIME_SCALES}
+-      portaled={portaled}
+-      onChange={(v) => {
+-        setSpeed(v)
+-        writeCascadedOverride('speed', v)
+-      }}
+-    />
+-  )
+-}
+diff --git a/src/engine/fastled/fastledPatternHandle.ts b/src/engine/fastled/fastledPatternHandle.ts
+index 4361ff71..963e6870 100644
+--- a/src/engine/fastled/fastledPatternHandle.ts
++++ b/src/engine/fastled/fastledPatternHandle.ts
+@@ -42,9 +42,14 @@ export function createFastLedPatternHandle(opts: {
+    * −1 = black. Absent = index projection (map index i shows leds[i]).
+    */
+   projection?: Int32Array | null
+-}): { handle: PatternHandle; metadata: PatternMetadata } {
++}): {
++  handle: PatternHandle
++  metadata: PatternMetadata
++  /** Swaps the surface projection table (Ausgabe Scale/Rotate); null = index. */
++  setProjection: (table: Int32Array | null) => void
++} {
+   const { host, rgb, output, controls } = opts
+-  const projection = opts.projection ?? null
++  let projection = opts.projection ?? null
+   let started = false
+   let buf: Uint8Array = new Uint8Array(0)
+   let count = 0
+@@ -128,5 +133,9 @@ export function createFastLedPatternHandle(opts: {
+     renderFns: { hasBeforeRender: true, hasRender: true, hasRender2D: true, hasRender3D: true },
+   }
+ 
+-  return { handle, metadata }
++  const setProjection = (table: Int32Array | null) => {
++    projection = table
++  }
++
++  return { handle, metadata, setProjection }
+ }
+diff --git a/src/engine/fastled/fastledPatternHandle.wasm.test.ts b/src/engine/fastled/fastledPatternHandle.wasm.test.ts
+index 60f36cb5..d95748e2 100644
+--- a/src/engine/fastled/fastledPatternHandle.wasm.test.ts
++++ b/src/engine/fastled/fastledPatternHandle.wasm.test.ts
+@@ -12,6 +12,7 @@ import type { MapPoint } from '@/engine/maps/types'
+ import { FASTLED_HOST_ABI_VERSION, instantiateFastLedHost } from './fastledWasmHost'
+ import { createFastLedPatternHandle } from './fastledPatternHandle'
+ import { fastLedControlBindings, mergePersistedControlValues } from './fastledControls'
++import { NEUTRAL_OUTPUT, type OutputAdjust } from '@/engine/outputAdjust'
+ 
+ interface Golden {
+   frameMs: number
+@@ -25,7 +26,7 @@ interface Golden {
+ 
+ const fixture = (name: string) => new URL(`./__fixtures__/${name}`, import.meta.url)
+ 
+-async function replay(name: string, output: 'wire' | 'leds', pixelCount?: number) {
++async function replay(name: string, output: 'wire' | 'leds', pixelCount?: number, ausgabe?: OutputAdjust) {
+   const golden = JSON.parse(readFileSync(fixture(`${name}.golden.json`), 'utf8')) as Golden
+   const expected = Buffer.from(output === 'wire' ? golden.l2 : golden.l1, 'base64')
+   const host = await instantiateFastLedHost(readFileSync(fixture(`${name}.wasm`)))
+@@ -46,6 +47,8 @@ async function replay(name: string, output: 'wire' | 'leds', pixelCount?: number
+     handle, shim, clock, mapPoints, pixelCount: n,
+     renderCompatibility: selectRenderCompatibility(1, metadata.renderFns),
+     getSpeed: () => 1, getBrightness: () => 0.5, isDimmed: () => false,
++    getOutput: ausgabe ? () => ausgabe : undefined,
++    coordinateOutput: false,
+     paint: () => { throw new Error('packed path expected') },
+     paintPacked: (frame) => { frames.push(Uint8Array.from(frame, (v) => Math.round(v * 255))) },
+   })
+@@ -93,6 +96,26 @@ describe('FastLED Pattern handle with real wasm (golden)', () => {
+     }
+   }
+ 
++  for (const output of ['wire', 'leds'] as const) {
++    it(`pipeline: neutral Ausgabe keeps the ${output === 'wire' ? 'L2' : 'L1'} bytes exact (0 differing bytes)`, async () => {
++      const { golden, expected, frames, n } = await replay('pipeline', output, undefined, { ...NEUTRAL_OUTPUT })
++      expect(frames).toHaveLength(golden.frames)
++      expect(countDiff(frames, expected, golden.ledCount, n)).toBe(0)
++    })
++  }
++
++  it('Ausgabe Helligkeit 50 % halves the FastLED bytes on the router frame', async () => {
++    const { golden, expected, frames, n } = await replay('template64', 'wire', undefined, { ...NEUTRAL_OUTPUT, brightness: 0.5 })
++    let checked = 0
++    frames.forEach((frame, f) => {
++      for (let k = 0; k < n * 3; k++) {
++        expect(frame[k]).toBe(Math.round((expected[f * golden.ledCount * 3 + k] / 255) * 0.5 * 255))
++        checked++
++      }
++    })
++    expect(checked).toBeGreaterThan(0)
++  })
++
+   it('renders extra map pixels black when the map is larger than the Pattern', async () => {
+     const { golden, expected, frames, n } = await replay('template64', 'wire', 70)
+     expect(n).toBe(70)
+diff --git a/src/engine/fastled/fastledProjection.test.ts b/src/engine/fastled/fastledProjection.test.ts
+index fe39c720..05d881b9 100644
+--- a/src/engine/fastled/fastledProjection.test.ts
++++ b/src/engine/fastled/fastledProjection.test.ts
+@@ -184,12 +184,38 @@ describe('projection table', () => {
+     expect(Array.from(table)).toEqual([0, -1, 5])
+   })
+ 
++  it('Ausgabe neutral (zoom 1, rotate 0) is exactly the plain table', () => {
++    const pts = gridPoints(10, 7)
++    const raster = rasterSketchLayout(6, 5, 30)
++    const plain = buildFastLedProjectionTable(pts, raster, OPTS)
++    expect(Array.from(buildFastLedProjectionTable(pts, raster, { ...OPTS, zoom: 1, rotateDeg: 0 }))).toEqual(Array.from(plain))
++  })
++
++  it('Ausgabe Scale zooms the sampled region about the map centre', () => {
++    const raster = rasterSketchLayout(3, 3, 9)
++    // 4× zoom: every map pixel samples close to the centre → the centre LED.
++    expect(Array.from(buildFastLedProjectionTable(gridPoints(3, 3), raster, { ...OPTS, zoom: 4 }))).toEqual([4, 4, 4, 4, 4, 4, 4, 4, 4])
++    // 0.5× zoom: the corners sample outside the raster → black.
++    const out = buildFastLedProjectionTable(gridPoints(3, 3), raster, { ...OPTS, zoom: 0.5 })
++    expect(out[0]).toBe(-1)
++    expect(out[4]).toBe(4)
++  })
++
++  it('Ausgabe Rotate turns the sampled region (180° = both flips, 90° quarter turn)', () => {
++    const raster3x2 = rasterSketchLayout(3, 2, 6)
++    expect(Array.from(buildFastLedProjectionTable(gridPoints(3, 2), raster3x2, { ...OPTS, rotateDeg: 180 }))).toEqual([5, 4, 3, 2, 1, 0])
++    const quarter = buildFastLedProjectionTable(gridPoints(3, 3), rasterSketchLayout(3, 3, 9), { ...OPTS, rotateDeg: 90 })
++    expect(Array.from(quarter)).toEqual([6, 3, 0, 7, 4, 1, 8, 5, 2])
++  })
++
+   it('a memoised table is reused for the same inputs and rebuilt when options change', () => {
+     const pts = gridPoints(10, 10)
+     const raster = rasterSketchLayout(5, 5, 25)
+     const a = cachedFastLedProjectionTable(pts, raster, OPTS)
+     expect(cachedFastLedProjectionTable(gridPoints(10, 10), rasterSketchLayout(5, 5, 25), OPTS)).toBe(a)
+     expect(cachedFastLedProjectionTable(pts, raster, { ...OPTS, flipX: true })).not.toBe(a)
++    expect(cachedFastLedProjectionTable(pts, raster, { ...OPTS, zoom: 2 })).not.toBe(a)
++    expect(cachedFastLedProjectionTable(pts, raster, { ...OPTS, rotateDeg: 10 })).not.toBe(a)
+   })
+ 
+   it('10,330 map pixels against a 64×64 raster build fast', () => {
+diff --git a/src/engine/fastled/fastledProjection.ts b/src/engine/fastled/fastledProjection.ts
+index a23b9b75..bfb9e381 100644
+--- a/src/engine/fastled/fastledProjection.ts
++++ b/src/engine/fastled/fastledProjection.ts
+@@ -18,6 +18,7 @@
+ // `// @pxlblz-projection surface fit=contain` (editable Patterns) or in the
+ // per-example override bag (read-only catalogue examples), same text format.
+ import type { FastLedScreenMap } from './fastledWasmHost'
++import { zoomRotateOffset } from '../outputAdjust'
+ 
+ export type FastLedProjectionMode = 'index' | 'surface'
+ export type FastLedProjectionFit = 'contain' | 'fill'
+@@ -317,6 +318,13 @@ export interface FastLedProjectionTableOptions {
+    * real LED positions. Null/absent = every point active.
+    */
+   active?: ArrayLike<number> | null
++  /**
++   * Ausgabe Scale (zoom about the map centre, 2 = the image twice as large)
++   * and Rotate (degrees, image turns from +u towards +v), applied to the map
++   * positions before the flips and the fit. Absent/1/0 = the plain fit.
++   */
++  zoom?: number
++  rotateDeg?: number
+ }
+ 
+ /**
+@@ -399,10 +407,14 @@ export function buildFastLedProjectionTable(
+     head[b] = i
+   }
+   const maxD2 = pitch * pitch * 1.0000001
++  const zoom = opts.zoom ?? 1
++  const rotateDeg = opts.rotateDeg ?? 0
++  const zoomRotate = zoom !== 1 || rotateDeg !== 0
+   for (let i = 0; i < n; i++) {
+     if (!isActive(opts.active, i)) continue
+     let u = mw > 0 ? mx[i] - mx0 : mw / 2
+     let v = mh > 0 ? my[i] - my0 : mh / 2
++    if (zoomRotate) [u, v] = zoomRotateOffset(u, v, mw / 2, mh / 2, zoom, rotateDeg)
+     if (opts.flipX) u = mw - u
+     if (opts.flipY) v = mh - v
+     const x = offX + u * scaleX
+@@ -482,7 +494,7 @@ export function cachedFastLedProjectionTable(
+   let mh = 0x811c9dc5
+   for (const p of mapPoints) mh = hashNumbers(p, mh)
+   const activeHash = opts.active ? hashNumbers(opts.active) : 0
+-  const key = [mapPoints.length, mh, layout.ledCount, hashNumbers(layout.positions), layout.pitch, opts.fit, opts.flipX, opts.flipY, opts.axes, activeHash].join('|')
++  const key = [mapPoints.length, mh, layout.ledCount, hashNumbers(layout.positions), layout.pitch, opts.fit, opts.flipX, opts.flipY, opts.axes, activeHash, opts.zoom ?? 1, opts.rotateDeg ?? 0].join('|')
+   const hit = tableCache.get(key)
+   if (hit) {
+     tableCache.delete(key)
+diff --git a/src/engine/outputAdjust.test.ts b/src/engine/outputAdjust.test.ts
+new file mode 100644
+index 00000000..54a04384
+--- /dev/null
++++ b/src/engine/outputAdjust.test.ts
+@@ -0,0 +1,138 @@
++import { describe, expect, it } from 'vitest'
++import {
++  NEUTRAL_OUTPUT,
++  adjustOutputPixel,
++  applyOutputColor,
++  clampOutputSpeed,
++  isOutputModified,
++  mapFrameOf,
++  rotateHueInto,
++  transformMapCoordinates,
++  zoomRotateOffset,
++} from './outputAdjust'
++
++const close = (a: ArrayLike<number>, b: ArrayLike<number>, digits = 9) => {
++  expect(a.length).toBe(b.length)
++  for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(b[i], digits)
++}
++
++describe('Ausgabe colour (Hue → Helligkeit)', () => {
++  it('leaves the frame untouched at the neutral values (same bits)', () => {
++    const frame = Float64Array.from([0.1, 0.2, 0.30000000000000004, 1, 0, 0.5])
++    const before = Float64Array.from(frame)
++    applyOutputColor(frame, 2, NEUTRAL_OUTPUT)
++    expect(Array.from(frame)).toEqual(Array.from(before))
++    const px: [number, number, number] = [0.25, 0.5, 0.75]
++    expect(adjustOutputPixel(px, NEUTRAL_OUTPUT)).toBe(px)
++  })
++
++  it('scales every channel by Helligkeit', () => {
++    const frame = Float64Array.from([1, 0.5, 0.2])
++    applyOutputColor(frame, 1, { brightness: 0.5, hue: 0 })
++    close(frame, [0.5, 0.25, 0.1])
++    expect(Array.from(frame, (v) => Math.round(v * 255))).toEqual([128, 64, 26])
++  })
++
++  it('rotates the hue: red +120° is green, +240° is blue, −120° is blue', () => {
++    const red = () => Float64Array.from([1, 0, 0])
++    const a = red(); rotateHueInto(a, 0, 120 / 360); close(a, [0, 1, 0])
++    const b = red(); rotateHueInto(b, 0, 240 / 360); close(b, [0, 0, 1])
++    const c = red(); rotateHueInto(c, 0, -120 / 360); close(c, [0, 0, 1])
++    const d = Float64Array.from([1, 0.5, 0]) // orange, 30°
++    rotateHueInto(d, 0, 180 / 360) // → azure, 210°
++    close(d, [0, 0.5, 1])
++  })
++
++  it('keeps grey and keeps value/saturation (max and min channel)', () => {
++    const grey = Float64Array.from([0.4, 0.4, 0.4])
++    rotateHueInto(grey, 0, 0.3)
++    close(grey, [0.4, 0.4, 0.4])
++    const c = Float64Array.from([0.8, 0.3, 0.1])
++    rotateHueInto(c, 0, 77 / 360)
++    expect(Math.max(...c)).toBeCloseTo(0.8, 12)
++    expect(Math.min(...c)).toBeCloseTo(0.1, 12)
++  })
++
++  it('applies Hue before Helligkeit and leaves masked pixels black', () => {
++    const frame = Float64Array.from([1, 0, 0, 0, 0, 0, 1, 0, 0])
++    applyOutputColor(frame, 3, { brightness: 0.5, hue: 120 }, Uint8Array.from([1, 0, 1]))
++    close(frame, [0, 0.5, 0, 0, 0, 0, 0, 0.5, 0])
++  })
++
++  it('unpacked pixels get the same adjustment', () => {
++    close(adjustOutputPixel([1, 0, 0], { brightness: 0.5, hue: 120 }), [0, 0.5, 0])
++  })
++})
++
++describe('Ausgabe geometry (Scale / Rotate)', () => {
++  const square = [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 0.5]]
++  const pack = (pts: number[][]) => {
++    const out = new Float64Array(pts.length * 3)
++    pts.forEach((p, i) => { out[i * 3] = p[0] ?? 0; out[i * 3 + 1] = p[1] ?? 0; out[i * 3 + 2] = p[2] ?? 0 })
++    return out
++  }
++
++  it('returns the base array itself at the neutral values', () => {
++    const base = pack(square)
++    expect(transformMapCoordinates(base, mapFrameOf(square), { scale: 1, rotate: 0 })).toBe(base)
++  })
++
++  it('zooms about the map centre: Scale 2 samples half the extent', () => {
++    const base = pack(square)
++    const out = transformMapCoordinates(base, mapFrameOf(square), { scale: 2, rotate: 0 })
++    close(out, pack([[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75], [0.5, 0.5]]))
++  })
++
++  it('rotates about the centre: +90° samples the point turned by −90°', () => {
++    const out = transformMapCoordinates(pack(square), mapFrameOf(square), { scale: 1, rotate: 90 })
++    // (1,0) − c = (0.5,−0.5) → R(−90°) → (−0.5,−0.5) → (0,0)
++    close(out, pack([[0, 1], [0, 0], [1, 1], [1, 0], [0.5, 0.5]]))
++  })
++
++  it('uses the centre of the active points only', () => {
++    const pts = [[0, 0], [1, 1], [9, 9]]
++    const frame = mapFrameOf(pts, Uint8Array.from([1, 1, 0]))
++    expect(frame.centre.slice(0, 2)).toEqual([0.5, 0.5])
++  })
++
++  it('1D maps: Scale moves x only, Rotate has no plane', () => {
++    const pts = [[0], [0.5], [1]]
++    const base = pack(pts)
++    base[1] = 0.5 // filler y (renderer padding) must not move
++    const frame = mapFrameOf(pts)
++    expect(frame.dims).toBe(1)
++    const out = transformMapCoordinates(base, frame, { scale: 2, rotate: 90 })
++    close([out[0], out[3], out[6]], [0.25, 0.5, 0.75])
++    expect(out[1]).toBe(0.5)
++  })
++
++  it('3D maps rotate in the plane of the two largest extents', () => {
++    // Flat in y (extent 0.2): plane = xz.
++    const pts = [[0, 0.4, 0], [1, 0.6, 0], [0, 0.5, 1], [1, 0.5, 1]]
++    const frame = mapFrameOf(pts)
++    expect(frame.plane).toEqual([0, 2])
++    const out = transformMapCoordinates(pack(pts), frame, { scale: 1, rotate: 180 })
++    // 180° about (0.5, *, 0.5): x and z mirror, y untouched.
++    close(out, pack([[1, 0.4, 1], [0, 0.6, 1], [1, 0.5, 0], [0, 0.5, 0]]))
++  })
++
++  it('zoomRotateOffset matches the coordinate transform', () => {
++    const [u, v] = zoomRotateOffset(1, 0, 0.5, 0.5, 2, 90)
++    expect(u).toBeCloseTo(0.25, 12)
++    expect(v).toBeCloseTo(0.25, 12)
++  })
++})
++
++describe('Ausgabe values', () => {
++  it('detects any non-neutral value', () => {
++    expect(isOutputModified({ ...NEUTRAL_OUTPUT, speed: 1 })).toBe(false)
++    expect(isOutputModified({ ...NEUTRAL_OUTPUT, speed: 2 })).toBe(true)
++    expect(isOutputModified({ ...NEUTRAL_OUTPUT, hue: 1, speed: 1 })).toBe(true)
++  })
++
++  it('clamps Speed to 0..4 (old 10× preset → 4×)', () => {
++    expect(clampOutputSpeed(10)).toBe(4)
++    expect(clampOutputSpeed(-1)).toBe(0)
++    expect(clampOutputSpeed(Number.NaN)).toBe(1)
++  })
++})
+diff --git a/src/engine/outputAdjust.ts b/src/engine/outputAdjust.ts
+new file mode 100644
+index 00000000..0da63e3c
+--- /dev/null
++++ b/src/engine/outputAdjust.ts
+@@ -0,0 +1,268 @@
++// Pattern output adjustment ("Ausgabe", local fork): five per-Pattern controls
++// that act on what the router (and the preview) receive, for Pixelblaze and
++// FastLED Patterns alike. Engine-pure: no React, no store.
++//
++//   Speed       time factor on the frame delta (renderLoop: Pixelblaze delta and
++//               the FastLED virtual clock alike; it is the deck's one speed).
++//   Scale       zoom about the map centre: the Pattern samples (p - c) / scale.
++//   Rotate      rotation about the map centre in the map plane: the Pattern
++//               samples R(-angle) · (p - c), so the image turns by +angle (from
++//               +x towards +y of the map coordinates). 3D maps: the plane of
++//               the two axes with the largest extent (largestExtentAxes, the
++//               plane a FastLED surface projection uses).
++//   Hue         rotation of the final RGB frame's hue (HSV; keeps value and
++//               saturation).
++//   Helligkeit  scales the final RGB frame.
++//
++// Order: render (Speed/Scale/Rotate at the time/coordinate/projection input) →
++// frame → Hue → Helligkeit → active mask black → renderer + router. At the
++// neutral values nothing is touched, so the frame is byte-identical to a
++// Pattern without output adjustment (FastLED L1/L2 bytes stay FastLED's).
++
++export interface OutputAdjust {
++  /** 0..1, scales the final RGB frame. */
++  brightness: number
++  /** Degrees, −180..180. */
++  hue: number
++  /** Zoom factor, 0.25..4 (2 = the image appears twice as large). */
++  scale: number
++  /** Degrees, −180..180. */
++  rotate: number
++}
++
++export const NEUTRAL_OUTPUT: OutputAdjust = { brightness: 1, hue: 0, scale: 1, rotate: 0 }
++
++export const OUTPUT_LIMITS = {
++  brightness: { min: 0, max: 1 },
++  speed: { min: 0, max: 4 },
++  hue: { min: -180, max: 180 },
++  scale: { min: 0.25, max: 4 },
++  rotate: { min: -180, max: 180 },
++} as const
++
++function clampTo(value: unknown, min: number, max: number, fallback: number): number {
++  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
++  return Math.min(max, Math.max(min, value))
++}
++
++export function clampOutputBrightness(v: unknown): number {
++  return clampTo(v, OUTPUT_LIMITS.brightness.min, OUTPUT_LIMITS.brightness.max, 1)
++}
++export function clampOutputSpeed(v: unknown): number {
++  return clampTo(v, OUTPUT_LIMITS.speed.min, OUTPUT_LIMITS.speed.max, 1)
++}
++export function clampOutputHue(v: unknown): number {
++  return clampTo(v, OUTPUT_LIMITS.hue.min, OUTPUT_LIMITS.hue.max, 0)
++}
++export function clampOutputScale(v: unknown): number {
++  return clampTo(v, OUTPUT_LIMITS.scale.min, OUTPUT_LIMITS.scale.max, 1)
++}
++export function clampOutputRotate(v: unknown): number {
++  return clampTo(v, OUTPUT_LIMITS.rotate.min, OUTPUT_LIMITS.rotate.max, 0)
++}
++
++export function isNeutralColor(o: Pick<OutputAdjust, 'brightness' | 'hue'>): boolean {
++  return o.brightness === 1 && o.hue === 0
++}
++
++export function isNeutralGeometry(o: Pick<OutputAdjust, 'scale' | 'rotate'>): boolean {
++  return o.scale === 1 && o.rotate === 0
++}
++
++/** Whether any of the five controls (with speed) differs from neutral. */
++export function isOutputModified(o: OutputAdjust & { speed: number }): boolean {
++  return !isNeutralColor(o) || !isNeutralGeometry(o) || o.speed !== 1
++}
++
++// ------------------------------------------------------------------ colour
++
++/**
++ * Rotates the hue of one RGB triple (0..1 floats) by `turn` (fraction of a full
++ * turn) in place. Grey (r = g = b) is unchanged; max and min channel are kept.
++ */
++export function rotateHueInto(frame: Float64Array | number[], o: number, turn: number): void {
++  const r = Math.min(1, Math.max(0, frame[o]))
++  const g = Math.min(1, Math.max(0, frame[o + 1]))
++  const b = Math.min(1, Math.max(0, frame[o + 2]))
++  const max = Math.max(r, g, b)
++  const min = Math.min(r, g, b)
++  const d = max - min
++  if (d <= 0) return
++  let h: number
++  if (max === r) h = ((g - b) / d) / 6
++  else if (max === g) h = ((b - r) / d + 2) / 6
++  else h = ((r - g) / d + 4) / 6
++  h += turn
++  h -= Math.floor(h)
++  const h6 = h * 6
++  const sector = Math.floor(h6) % 6
++  const f = h6 - Math.floor(h6)
++  const rising = min + d * f
++  const falling = max - d * f
++  let nr: number, ng: number, nb: number
++  switch (sector) {
++    case 0: nr = max; ng = rising; nb = min; break
++    case 1: nr = falling; ng = max; nb = min; break
++    case 2: nr = min; ng = max; nb = rising; break
++    case 3: nr = min; ng = falling; nb = max; break
++    case 4: nr = rising; ng = min; nb = max; break
++    default: nr = max; ng = min; nb = falling; break
++  }
++  frame[o] = nr
++  frame[o + 1] = ng
++  frame[o + 2] = nb
++}
++
++/**
++ * Hue then Helligkeit over a packed RGB frame (3 floats per pixel), skipping
++ * masked pixels (they stay black: the active mask is the last step). A no-op
++ * at the neutral values.
++ */
++export function applyOutputColor(
++  frame: Float64Array,
++  pixelCount: number,
++  o: Pick<OutputAdjust, 'brightness' | 'hue'>,
++  activeMask?: ArrayLike<number> | null,
++): void {
++  if (isNeutralColor(o)) return
++  const turn = o.hue / 360
++  const b = o.brightness
++  for (let i = 0; i < pixelCount; i++) {
++    if (activeMask && i < activeMask.length && activeMask[i] === 0) continue
++    const k = i * 3
++    if (turn !== 0) rotateHueInto(frame, k, turn)
++    if (b !== 1) {
++      frame[k] *= b
++      frame[k + 1] *= b
++      frame[k + 2] *= b
++    }
++  }
++}
++
++/** The same for one unpacked pixel (the non-packed paint path). */
++export function adjustOutputPixel(
++  pixel: [number, number, number],
++  o: Pick<OutputAdjust, 'brightness' | 'hue'>,
++): [number, number, number] {
++  if (isNeutralColor(o)) return pixel
++  const out: [number, number, number] = [pixel[0], pixel[1], pixel[2]]
++  if (o.hue !== 0) rotateHueInto(out, 0, o.hue / 360)
++  if (o.brightness !== 1) {
++    out[0] *= o.brightness
++    out[1] *= o.brightness
++    out[2] *= o.brightness
++  }
++  return out
++}
++
++// ------------------------------------------------------------------ geometry
++
++
++export interface MapFrame {
++  /** Map dimension (1..3): the axes that carry coordinates. */
++  dims: number
++  /** Bounding-box centre of the active points. */
++  centre: [number, number, number]
++  /** The rotation plane (axis indices). */
++  plane: [number, number]
++}
++
++/**
++ * Centre and rotation plane of map sample points (masked points ignored).
++ * 2D maps rotate in xy; 3D maps in the plane of their two largest extents.
++ */
++export function mapFrameOf(
++  points: readonly (readonly number[])[],
++  activeMask?: ArrayLike<number> | null,
++): MapFrame {
++  let dims = 0
++  const min = [Infinity, Infinity, Infinity]
++  const max = [-Infinity, -Infinity, -Infinity]
++  for (let i = 0; i < points.length; i++) {
++    const p = points[i]
++    if (p.length > dims) dims = Math.min(3, p.length)
++    if (activeMask && i < activeMask.length && activeMask[i] === 0) continue
++    for (let a = 0; a < 3 && a < p.length; a++) {
++      if (p[a] < min[a]) min[a] = p[a]
++      if (p[a] > max[a]) max[a] = p[a]
++    }
++  }
++  const centre: [number, number, number] = [0.5, 0.5, 0.5]
++  const ext = [0, 0, 0]
++  for (let a = 0; a < 3; a++) {
++    if (max[a] >= min[a]) {
++      centre[a] = (min[a] + max[a]) / 2
++      ext[a] = max[a] - min[a]
++    }
++  }
++  // Drop the axis with the smallest extent (ties drop z before y before x),
++  // exactly like largestExtentAxes in the FastLED projection.
++  let plane: [number, number] = [0, 1]
++  if (dims >= 3) {
++    const smallest = ext[2] <= ext[1] && ext[2] <= ext[0] ? 2 : ext[1] <= ext[0] ? 1 : 0
++    plane = smallest === 2 ? [0, 1] : smallest === 1 ? [0, 2] : [1, 2]
++  }
++  return { dims, centre, plane }
++}
++
++/**
++ * The coordinates a Pattern samples under Scale/Rotate: `base` holds x,y,z per
++ * pixel; only the map's own axes (< frame.dims) move. Returns `base` itself at
++ * the neutral values (no copy, so the neutral path is bit-identical).
++ */
++export function transformMapCoordinates(
++  base: Float64Array,
++  frame: MapFrame,
++  o: Pick<OutputAdjust, 'scale' | 'rotate'>,
++  target?: Float64Array,
++): Float64Array {
++  if (isNeutralGeometry(o) || frame.dims === 0) return base
++  const out = target && target.length === base.length ? target : new Float64Array(base.length)
++  const inv = 1 / o.scale
++  const rotate = frame.dims >= 2 && o.rotate !== 0
++  const rad = (o.rotate * Math.PI) / 180
++  const cos = Math.cos(rad)
++  const sin = Math.sin(rad)
++  const [pa, pb] = frame.plane
++  const c = frame.centre
++  for (let k = 0; k < base.length; k += 3) {
++    for (let a = 0; a < 3; a++) {
++      out[k + a] = a < frame.dims ? c[a] + (base[k + a] - c[a]) * inv : base[k + a]
++    }
++    if (rotate) {
++      const u = out[k + pa] - c[pa]
++      const v = out[k + pb] - c[pb]
++      // R(-angle): the sampled point turns backwards so the image turns forwards.
++      out[k + pa] = c[pa] + cos * u + sin * v
++      out[k + pb] = c[pb] - sin * u + cos * v
++    }
++  }
++  return out
++}
++
++/**
++ * The same map-plane zoom/rotation on 2D offsets from a centre, used by the
++ * FastLED surface projection (map → sketch fit). Returns [u, v] relative to the
++ * same origin as the inputs.
++ */
++export function zoomRotateOffset(
++  u: number,
++  v: number,
++  cu: number,
++  cv: number,
++  scale: number,
++  rotateDeg: number,
++): [number, number] {
++  let du = (u - cu) / scale
++  let dv = (v - cv) / scale
++  if (rotateDeg !== 0) {
++    const rad = (rotateDeg * Math.PI) / 180
++    const cos = Math.cos(rad)
++    const sin = Math.sin(rad)
++    const ru = cos * du + sin * dv
++    const rv = -sin * du + cos * dv
++    du = ru
++    dv = rv
++  }
++  return [cu + du, cv + dv]
++}
+diff --git a/src/engine/previewPanel.ts b/src/engine/previewPanel.ts
+index 82e43750..1f3a093c 100644
+--- a/src/engine/previewPanel.ts
++++ b/src/engine/previewPanel.ts
+@@ -3,7 +3,8 @@ import { formatPercentageValue } from './percentageValue'
+ 
+ export interface PanelReadout { glyph?: 'light' | 'diffusion' | 'renderer' | 'speed' | 'fps' | 'elapsed' | 'layout' | 'view' | 'fit' | 'pixels'; value: string; label?: string; live?: boolean }
+ export function panelSectionKey(mode: string, section: string): string { return `${mode}:${section.toLowerCase()}` }
+-export function panelSectionDefault(section: string): boolean { return section === 'Controls' }
++// Controls and Ausgabe (local fork: what the LEDs get) start expanded.
++export function panelSectionDefault(section: string): boolean { return section === 'Controls' || section === 'Ausgabe' }
+ /** CSS container queries use the same 380px panel breakpoint. */
+ export function panelFieldColumns(width: number): 1 | 2 { return width < 380 ? 1 : 2 }
+ export function describePreviewReadout(s: { lightSize: number; diffusion: number; fidelity: string; speed: number; fps: number | null; elapsed: number | null; layout: string | null }): PanelReadout[] {
+diff --git a/src/engine/renderLoop.output.test.ts b/src/engine/renderLoop.output.test.ts
+new file mode 100644
+index 00000000..86a1784b
+--- /dev/null
++++ b/src/engine/renderLoop.output.test.ts
+@@ -0,0 +1,196 @@
++// Ausgabe (outputAdjust.ts) through the real render loop: neutral values are
++// bit-identical in Fast and Precise, Hue/Helligkeit reach the packed (router)
++// frame, Scale/Rotate move the coordinates a Pixelblaze Pattern samples, and
++// Speed scales the FastLED frame dt.
++import { describe, expect, it, vi } from 'vitest'
++import { bundle } from '@/engine/bundle'
++import { loadPattern } from '@/engine/loadPattern'
++import { createRenderLoop } from '@/engine/renderLoop'
++import { createFxShim, createShim } from '@/engine/shim'
++import { createVirtualClock } from '@/engine/virtualClock'
++import { createPlaneMap } from '@/engine/maps'
++import { selectRenderCompatibility } from '@/engine/renderCompatibility'
++import type { MapPoint } from '@/engine/maps/types'
++import { LIBRARIES } from '@/pixelblaze/libs'
++import { NEUTRAL_OUTPUT, type OutputAdjust } from './outputAdjust'
++import { createFastLedPatternHandle, type FastLedHostLike } from './fastled/fastledPatternHandle'
++
++const PATTERN_2D = `
++export function beforeRender(delta) { t1 = time(.05) }
++export function render2D(index, x, y) { hsv(x * .7 + y * .3 + t1, 1, .5 + x / 2) }
++`
++const PATTERN_1D = `
++export function beforeRender(delta) { t1 = time(.03) }
++export function render(index, x) { hsv(x + t1, 1 - x / 3, 1) }
++`
++const COORDS_2D = `export function render2D(index, x, y) { rgb(x, y, 0) }`
++
++type Mode = 'fast' | 'fidelity'
++
++function run(src: string, mode: Mode, mapPoints: MapPoint[], dims: 1 | 2 | 3, output?: OutputAdjust, frames = 6) {
++  const { code, fxCode, metadata } = bundle(src, LIBRARIES)
++  const clock = createVirtualClock()
++  const config = { mapPoints, pixelCount: mapPoints.length, dimensions: dims, getVirtualTime: () => clock.getTime(), randomSeed: 1 }
++  const shim = mode === 'fast' ? createShim(config) : createFxShim(config)
++  const handle = loadPattern(mode === 'fast' ? code : fxCode, metadata, shim.builtins)
++  const out: Float64Array[] = []
++  const loop = createRenderLoop({
++    handle, shim, clock, mapPoints, pixelCount: mapPoints.length,
++    renderCompatibility: selectRenderCompatibility(dims, metadata.renderFns),
++    getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++    getOutput: output ? () => output : undefined,
++    paint: () => { throw new Error('packed path expected') },
++    paintPacked: (frame) => { out.push(Float64Array.from(frame)) },
++  })
++  loop.renderPreviewFrame()
++  for (let f = 1; f < frames; f++) loop.tickFrame(33)
++  return out
++}
++
++function sameBits(a: Float64Array[], b: Float64Array[]): boolean {
++  if (a.length !== b.length) return false
++  for (let f = 0; f < a.length; f++) {
++    if (a[f].length !== b[f].length) return false
++    for (let k = 0; k < a[f].length; k++) if (!Object.is(a[f][k], b[f][k])) return false
++  }
++  return true
++}
++
++const plane = (n: number) => createPlaneMap({ rows: n, cols: n }).resolve(n * n)
++const line = (n: number): MapPoint[] => Array.from({ length: n }, (_, i) => ({ sample: [i / (n - 1)] }))
++
++describe('Ausgabe neutral = identity', () => {
++  for (const mode of ['fast', 'fidelity'] as const) {
++    it(`2D ${mode === 'fast' ? 'Fast' : 'Precise'}: neutral Ausgabe frames are bit-identical to no Ausgabe`, () => {
++      const plain = run(PATTERN_2D, mode, plane(8), 2)
++      const neutral = run(PATTERN_2D, mode, plane(8), 2, { ...NEUTRAL_OUTPUT })
++      expect(plain.some((f) => f.some((v) => v > 0))).toBe(true)
++      expect(sameBits(plain, neutral)).toBe(true)
++    })
++    it(`1D ${mode === 'fast' ? 'Fast' : 'Precise'}: neutral Ausgabe frames are bit-identical to no Ausgabe`, () => {
++      expect(sameBits(run(PATTERN_1D, mode, line(40), 1), run(PATTERN_1D, mode, line(40), 1, { ...NEUTRAL_OUTPUT }))).toBe(true)
++    })
++  }
++})
++
++describe('Ausgabe colour reaches the router frame', () => {
++  it('Helligkeit 50 % halves the packed frame; Hue 120° turns red into green', () => {
++    const red = `export function render2D(index, x, y) { rgb(1, 0, 0) }`
++    const half = run(red, 'fast', plane(2), 2, { ...NEUTRAL_OUTPUT, brightness: 0.5 }, 1)[0]
++    expect(Array.from(half)).toEqual([0.5, 0, 0, 0.5, 0, 0, 0.5, 0, 0, 0.5, 0, 0])
++    const green = run(red, 'fast', plane(2), 2, { ...NEUTRAL_OUTPUT, hue: 120 }, 1)[0]
++    expect(Array.from(green, (v) => Math.round(v * 255))).toEqual([0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0])
++  })
++
++  it('masked pixels stay black after Hue and Helligkeit (mask is last)', () => {
++    const { code, metadata } = bundle(`export function render2D(index, x, y) { rgb(1, .5, 0) }`, LIBRARIES)
++    const mapPoints = plane(2)
++    const clock = createVirtualClock()
++    const shim = createShim({ mapPoints, pixelCount: 4, dimensions: 2, getVirtualTime: () => 0 })
++    const frames: Float64Array[] = []
++    const loop = createRenderLoop({
++      handle: loadPattern(code, metadata, shim.builtins), shim, clock, mapPoints, pixelCount: 4,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      activeMask: Uint8Array.from([1, 0, 1, 1]),
++      getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++      getOutput: () => ({ brightness: 0.8, hue: 90, scale: 1, rotate: 0 }),
++      paint: () => undefined,
++      paintPacked: (f) => { frames.push(Float64Array.from(f)) },
++    })
++    loop.renderPreviewFrame()
++    expect(Array.from(frames[0].slice(3, 6))).toEqual([0, 0, 0])
++    expect(frames[0][0] + frames[0][1] + frames[0][2]).toBeGreaterThan(0)
++  })
++
++  it('the unpacked paint path gets the same adjustment', () => {
++    const { code, metadata } = bundle(`export function render2D(index, x, y) { rgb(1, 0, 0) }`, LIBRARIES)
++    const mapPoints = plane(2)
++    const shim = createShim({ mapPoints, pixelCount: 4, dimensions: 2, getVirtualTime: () => 0 })
++    const painted: [number, number, number][][] = []
++    const loop = createRenderLoop({
++      handle: loadPattern(code, metadata, shim.builtins), shim, clock: createVirtualClock(), mapPoints, pixelCount: 4,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++      getOutput: () => ({ brightness: 0.5, hue: 0, scale: 1, rotate: 0 }),
++      paint: (px) => { painted.push(px) },
++    })
++    loop.renderPreviewFrame()
++    expect(painted[0][0]).toEqual([0.5, 0, 0])
++  })
++})
++
++describe('Ausgabe Scale / Rotate move the sampled map coordinates', () => {
++  const coords = (output: OutputAdjust) => {
++    const frame = run(COORDS_2D, 'fast', plane(3), 2, output, 1)[0]
++    return Array.from({ length: 9 }, (_, i) => [frame[i * 3], frame[i * 3 + 1]])
++  }
++
++  it('Scale 2 zooms about the map centre', () => {
++    const got = coords({ ...NEUTRAL_OUTPUT, scale: 2 })
++    expect(got[0]).toEqual([0.25, 0.25])
++    expect(got[4]).toEqual([0.5, 0.5])
++    expect(got[8]).toEqual([0.75, 0.75])
++  })
++
++  it('Rotate 90° turns the sampled points by −90° about the centre', () => {
++    const got = coords({ ...NEUTRAL_OUTPUT, rotate: 90 })
++    // pixel 0 sits at (0,0) and now samples (0,1); pixel 2 at (1,0) samples (0,0).
++    expect(got[0][0]).toBeCloseTo(0, 12)
++    expect(got[0][1]).toBeCloseTo(1, 12)
++    expect(got[2][0]).toBeCloseTo(0, 12)
++    expect(got[2][1]).toBeCloseTo(0, 12)
++  })
++
++  it('1D maps: Scale zooms render(index, x)', () => {
++    const src = `export function render(index, x) { rgb(x, 0, 0) }`
++    const frame = run(src, 'fast', line(5), 1, { ...NEUTRAL_OUTPUT, scale: 2, rotate: 45 }, 1)[0]
++    expect([0, 1, 2, 3, 4].map((i) => frame[i * 3])).toEqual([0.25, 0.375, 0.5, 0.625, 0.75])
++  })
++
++  it('coordinateOutput: false leaves coordinates alone (FastLED handles them in the projection)', () => {
++    const { code, metadata } = bundle(COORDS_2D, LIBRARIES)
++    const mapPoints = plane(3)
++    const shim = createShim({ mapPoints, pixelCount: 9, dimensions: 2, getVirtualTime: () => 0 })
++    const frames: Float64Array[] = []
++    const loop = createRenderLoop({
++      handle: loadPattern(code, metadata, shim.builtins), shim, clock: createVirtualClock(), mapPoints, pixelCount: 9,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      getSpeed: () => 1, getBrightness: () => 1, isDimmed: () => false,
++      getOutput: () => ({ ...NEUTRAL_OUTPUT, scale: 2 }), coordinateOutput: false,
++      paint: () => undefined, paintPacked: (f) => { frames.push(Float64Array.from(f)) },
++    })
++    loop.renderPreviewFrame()
++    expect([frames[0][0], frames[0][1]]).toEqual([0, 0])
++  })
++})
++
++describe('Speed reaches the FastLED virtual clock', () => {
++  it('the loop hands the FastLED host speed × real dt', () => {
++    const leds = new Uint8Array(3 * 4)
++    const host: FastLedHostLike = {
++      frame: vi.fn(() => ({ status: 0 })),
++      getLeds: () => leds, getWire: () => leds, ledCount: () => 4, getUi: () => [], setUi: () => true,
++      millis: () => 0, showCount: () => 0,
++    }
++    const mapPoints = line(4)
++    const clock = createVirtualClock()
++    const shim = createShim({ mapPoints, pixelCount: 4, dimensions: 1, getVirtualTime: () => clock.getTime() })
++    const { handle, metadata } = createFastLedPatternHandle({ host, rgb: shim.builtins.rgb as (r: number, g: number, b: number) => void, output: 'wire', controls: [] })
++    let speed = 2
++    const loop = createRenderLoop({
++      handle, shim, clock, mapPoints, pixelCount: 4,
++      renderCompatibility: selectRenderCompatibility(1, metadata.renderFns),
++      getSpeed: () => speed, getBrightness: () => 1, isDimmed: () => false,
++      getOutput: () => NEUTRAL_OUTPUT, coordinateOutput: false,
++      paint: () => undefined, paintPacked: () => undefined,
++    })
++    loop.renderPreviewFrame()
++    loop.tickFrame(16)
++    speed = 0.5
++    loop.tickFrame(16)
++    speed = 0
++    loop.tickFrame(16) // paused: no loop() call
++    expect((host.frame as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([0, 32, 8])
++    expect(clock.getTime()).toBe(40)
++  })
++})
+diff --git a/src/engine/renderLoop.ts b/src/engine/renderLoop.ts
+index ae2ca059..80827ecc 100644
+--- a/src/engine/renderLoop.ts
++++ b/src/engine/renderLoop.ts
+@@ -3,6 +3,16 @@ import type { ShimContext } from './shim'
+ import type { VirtualClock } from './virtualClock'
+ import type { MapPoint } from './maps'
+ import type { RenderCompatibility } from './renderCompatibility'
++import {
++  adjustOutputPixel,
++  applyOutputColor,
++  isNeutralColor,
++  isNeutralGeometry,
++  mapFrameOf,
++  transformMapCoordinates,
++  type MapFrame,
++  type OutputAdjust,
++} from './outputAdjust'
+ 
+ export interface RenderLoopConfig {
+   handle: PatternHandle
+@@ -25,6 +35,14 @@ export interface RenderLoopConfig {
+   // are unchanged) but their output is forced to black before paint /
+   // paintPacked, i.e. in the preview AND the router frame. Null = all active.
+   activeMask?: Uint8Array | null
++  // Ausgabe (outputAdjust.ts), read live every frame. Hue and Helligkeit
++  // adjust the finished frame (before paint / paintPacked, so the preview AND
++  // the router see them; masked pixels stay black). Scale and Rotate move the
++  // map coordinates the Pattern samples, unless `coordinateOutput` is false
++  // (FastLED: its handle ignores coordinates; the surface projection applies
++  // them instead). Absent = neutral, i.e. today's frames bit for bit.
++  getOutput?: () => OutputAdjust
++  coordinateOutput?: boolean
+   onError?: (err: Error) => void
+   onFrame?: (delta: number, builtins: Record<string, unknown>, elapsedMs: number) => void
+   /**
+@@ -96,6 +114,23 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+       : sample[2] ?? 0
+   }
+ 
++  // Ausgabe Scale/Rotate: the sampled coordinates, recomputed only when the
++  // values change. Neutral → the base array itself (bit-identical path).
++  const coordinateOutput = config.coordinateOutput !== false && Boolean(config.getOutput)
++  let mapFrame: MapFrame | null = null
++  let adjustedCoordinates: Float64Array | null = null
++  let adjustedScale = 1
++  let adjustedRotate = 0
++  function sampledCoordinates(output: OutputAdjust | null): Float64Array {
++    if (!coordinateOutput || !output || isNeutralGeometry(output)) return sampleCoordinates
++    if (adjustedCoordinates && adjustedScale === output.scale && adjustedRotate === output.rotate) return adjustedCoordinates
++    mapFrame ??= mapFrameOf(mapPoints.slice(0, pixelCount).map((p) => p?.sample ?? []), activeMask)
++    adjustedCoordinates = transformMapCoordinates(sampleCoordinates, mapFrame, output, adjustedCoordinates ?? undefined)
++    adjustedScale = output.scale
++    adjustedRotate = output.rotate
++    return adjustedCoordinates
++  }
++
+   function advanceBeforeRender(realDelta: number): number {
+     const scaledDelta = realDelta * getSpeed()
+     clock.advance(scaledDelta)
+@@ -107,6 +142,9 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+ 
+   function doTick(realDelta: number, dimmed: boolean, shouldPaint = true): void {
+     const scaledDelta = advanceBeforeRender(realDelta)
++    const output = config.getOutput?.() ?? null
++    const coordinates = sampledCoordinates(output)
++    const colorOutput = output !== null && !isNeutralColor(output) ? output : null
+ 
+     const pixels: [number, number, number][] | null = shouldPaint && !packedFrame ? [] : null
+ 
+@@ -116,9 +154,9 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+     // map carries `[x]`; a legacy/mapless point may still carry no sample.
+     for (let index = 0; index < pixelCount; index++) {
+       const coordinateOffset = index * 3
+-      const x = sampleCoordinates[coordinateOffset]
+-      const y = sampleCoordinates[coordinateOffset + 1]
+-      const z = sampleCoordinates[coordinateOffset + 2]
++      const x = coordinates[coordinateOffset]
++      const y = coordinates[coordinateOffset + 1]
++      const z = coordinates[coordinateOffset + 2]
+       // index crosses the engine->pattern boundary as a scalar, so it must be
+       // encoded to the active numeric domain (raw int32 in fidelity mode).
+       const encIndex = encodedIndexes[index]
+@@ -159,10 +197,13 @@ export function createRenderLoop(config: RenderLoopConfig): RenderLoop {
+         }
+       } else {
+         const captured = shim.capturedPixel()
+-        if (pixels) pixels.push(masked ? [0, 0, 0] : captured)
++        if (pixels) pixels.push(masked ? [0, 0, 0] : colorOutput ? adjustOutputPixel(captured, colorOutput) : captured)
+       }
+     }
+ 
++    // Ausgabe Hue → Helligkeit on the finished frame; masked pixels stay black.
++    if (packedFrame && shouldPaint && colorOutput) applyOutputColor(packedFrame, pixelCount, colorOutput, activeMask)
++
+     if (pixels) paint(pixels, getBrightness(), dimmed)
+     else if (shouldPaint && packedFrame) config.paintPacked?.(packedFrame, getBrightness(), dimmed)
+     config.onFrame?.(scaledDelta, shim.builtins, clock.getTime())
+diff --git a/src/engine/settings.test.ts b/src/engine/settings.test.ts
+index 173bbad0..4542d3dd 100644
+--- a/src/engine/settings.test.ts
++++ b/src/engine/settings.test.ts
+@@ -18,6 +18,10 @@ describe('DEV_DEFAULTS', () => {
+       'normalize',
+       'brightness',
+       'speed',
++      'outputBrightness',
++      'outputHue',
++      'outputScale',
++      'outputRotate',
+       'lightSize',
+       'diffusion',
+       'fidelity',
+diff --git a/src/engine/settings.ts b/src/engine/settings.ts
+index f22f890b..65934e47 100644
+--- a/src/engine/settings.ts
++++ b/src/engine/settings.ts
+@@ -24,8 +24,17 @@ export interface Settings {
+   pixelCount: number | null
+   solidity: number
+   normalize: 'contain' | 'fill'
++  // Preview-only monitor brightness (renderer only; never reaches the router).
+   brightness: number
++  // The one time factor (deck "Ausgabe" → Speed): Pixelblaze delta and the
++  // FastLED virtual clock, so it reaches the router too.
+   speed: number
++  // Ausgabe (local fork, outputAdjust.ts): adjustments of the final frame that
++  // reach the router as well as the preview. Neutral = 1 / 0 / 1 / 0.
++  outputBrightness: number
++  outputHue: number
++  outputScale: number
++  outputRotate: number
+   // Hybrid comfort prefs (all four layers).
+   lightSize: number
+   diffusion: number
+@@ -46,6 +55,10 @@ export const DEV_DEFAULTS: Settings = {
+   normalize: 'contain',
+   brightness: 1,
+   speed: 1,
++  outputBrightness: 1,
++  outputHue: 0,
++  outputScale: 1,
++  outputRotate: 0,
+   lightSize: DEFAULT_LIGHT_SIZE,
+   diffusion: 0.5,
+   fidelity: 'fast',
+@@ -65,6 +78,10 @@ export const CASCADED_FIELDS = [
+   'normalize',
+   'brightness',
+   'speed',
++  'outputBrightness',
++  'outputHue',
++  'outputScale',
++  'outputRotate',
+ ] as const satisfies readonly (keyof Settings)[]
+ 
+ export const HYBRID_FIELDS = ['lightSize', 'diffusion'] as const satisfies readonly (keyof Settings)[]
+diff --git a/src/store/patternStore.ts b/src/store/patternStore.ts
+index ab004912..042fb28a 100644
+--- a/src/store/patternStore.ts
++++ b/src/store/patternStore.ts
+@@ -27,6 +27,10 @@ interface PatternState {
+   // keyed by demo name. Parallel to PatternRecord.settings for user patterns; a demo
+   // has no record so its bag lives here instead.
+   demoOverrides: Record<string, Partial<Settings>>
++  // True once loadDemoOverrides settled (loaded or failed). Until then a demo's
++  // Ausgabe values are unknown, so the router frame is held back (no flash at
++  // full brightness before the persisted Helligkeit arrives).
++  demoOverridesLoaded: boolean
+   setActivePattern: (id: string | null) => void
+   setActiveLibrary: (name: string | null) => void
+   setActiveDemo: (name: string | null) => void
+@@ -56,6 +60,10 @@ interface PatternState {
+   // Clear a demo's layer-1 overrides ("Revert to recommended"), dropping it back to
+   // recommended + global-sticky + dev-default on the next resolve.
+   resetDemoSettings: (name: string) => Promise<void>
++  // Drop single layer-1 fields (Ausgabe "Zurücksetzen") from a pattern's or a
++  // demo's override bag, leaving its other overrides alone.
++  clearPatternSettingsFields: (id: string, fields: readonly (keyof Settings)[]) => Promise<void>
++  clearDemoSettingsFields: (name: string, fields: readonly (keyof Settings)[]) => Promise<void>
+ }
+ 
+ // The stable identity of the open *pushable* pattern — the key Send-to-Controller
+@@ -80,6 +88,7 @@ export const patternInitialState = {
+   userPatterns: [] as PatternRecord[],
+   patternsLoaded: false,
+   demoOverrides: {} as Record<string, Partial<Settings>>,
++  demoOverridesLoaded: false,
+ }
+ 
+ export const usePatternStore = create<PatternState>()((set, get) => ({
+@@ -111,7 +120,8 @@ export const usePatternStore = create<PatternState>()((set, get) => ({
+ 
+   loadDemoOverrides: async () => {
+     const stored = await getPersonalContentProvider().getDemoOverrides().catch(() => undefined)
+-    if (stored) set({ demoOverrides: stored })
++    if (stored) set({ demoOverrides: stored, demoOverridesLoaded: true })
++    else set({ demoOverridesLoaded: true })
+   },
+ 
+   addPattern: async (record) => {
+@@ -215,6 +225,35 @@ export const usePatternStore = create<PatternState>()((set, get) => ({
+     })
+     if (next) await getPersonalContentProvider().setDemoOverrides(next).catch(() => {})
+   },
++
++  clearPatternSettingsFields: async (id, fields) => {
++    let next: Partial<Settings> | undefined
++    set((s) => ({
++      userPatterns: s.userPatterns.map((p) => {
++        if (p.id !== id || !p.settings) return p
++        const copy: Partial<Settings> = { ...p.settings }
++        for (const f of fields) delete copy[f]
++        next = copy
++        return { ...p, settings: copy }
++      }),
++    }))
++    if (next === undefined) return
++    await getPersonalContentProvider().updatePattern(id, { settings: next }).catch(() => {})
++  },
++
++  clearDemoSettingsFields: async (name, fields) => {
++    let next: Record<string, Partial<Settings>> | undefined
++    set((s) => {
++      const bag = s.demoOverrides[name]
++      if (!bag) return {}
++      const copy: Partial<Settings> = { ...bag }
++      for (const f of fields) delete copy[f]
++      const { [name]: _drop, ...rest } = s.demoOverrides
++      next = Object.keys(copy).length > 0 ? { ...rest, [name]: copy } : rest
++      return { demoOverrides: next }
++    })
++    if (next) await getPersonalContentProvider().setDemoOverrides(next).catch(() => {})
++  },
+ }))
+ 
+ function patternRecordWithAttribution(record: PatternRecord): PatternRecord {
+diff --git a/src/store/previewStore.ts b/src/store/previewStore.ts
+index e659a172..b38633f9 100644
+--- a/src/store/previewStore.ts
++++ b/src/store/previewStore.ts
+@@ -1,13 +1,29 @@
+ import { create } from 'zustand'
+ import { persist } from 'zustand/middleware'
+ import { DEFAULT_LIGHT_SIZE } from '../engine/camera'
++import {
++  clampOutputBrightness,
++  clampOutputHue,
++  clampOutputRotate,
++  clampOutputScale,
++} from '../engine/outputAdjust'
+ 
+ export type FidelityMode = 'fidelity' | 'fast'
+ 
+ interface PreviewState {
+   isRunning: boolean
++  // The one time factor (deck "Ausgabe" → Speed; Show transport also drives it).
+   speed: number
++  // Preview-only monitor brightness: the renderer dims the drawn frame; the
++  // router frame never sees it.
+   brightness: number
++  // Ausgabe (local fork, engine/outputAdjust.ts): Helligkeit, Hue, Scale and
++  // Rotate of the frame the router AND the preview receive. Per-pattern
++  // cascaded like brightness/speed (seeded on open), never persisted here.
++  outputBrightness: number
++  outputHue: number
++  outputScale: number
++  outputRotate: number
+   // Preview light size: the drawn diameter of each light source as a
+   // fraction of the inter-dot pitch (diameter = pitch × lightSize). Grows the
+   // sources in place — never moves dots or resizes the canvas. A preview-only
+@@ -44,6 +60,10 @@ interface PreviewState {
+   setFidelity: (fidelity: FidelityMode) => void
+   setSpeed: (speed: number) => void
+   setBrightness: (brightness: number) => void
++  setOutputBrightness: (value: number) => void
++  setOutputHue: (value: number) => void
++  setOutputScale: (value: number) => void
++  setOutputRotate: (value: number) => void
+   setLightSize: (lightSize: number) => void
+   setDiffusion: (diffusion: number) => void
+   setLightSizeSticky: (lightSize: number) => void
+@@ -56,6 +76,10 @@ export const previewInitialState = {
+   isRunning: true,
+   speed: 1,
+   brightness: 1,
++  outputBrightness: 1,
++  outputHue: 0,
++  outputScale: 1,
++  outputRotate: 0,
+   lightSize: DEFAULT_LIGHT_SIZE,
+   diffusion: 0.5,
+   lightSizeSticky: DEFAULT_LIGHT_SIZE,
+@@ -128,6 +152,10 @@ export const usePreviewStore = create<PreviewState>()(
+       setFidelity: (fidelity) => set({ fidelity }),
+       setSpeed: (speed) => set({ speed }),
+       setBrightness: (brightness) => set({ brightness }),
++      setOutputBrightness: (value) => set({ outputBrightness: clampOutputBrightness(value) }),
++      setOutputHue: (value) => set({ outputHue: clampOutputHue(value) }),
++      setOutputScale: (value) => set({ outputScale: clampOutputScale(value) }),
++      setOutputRotate: (value) => set({ outputRotate: clampOutputRotate(value) }),
+       setLightSize: (lightSize) => set({ lightSize: clampLightSize(lightSize) }),
+       setDiffusion: (diffusion) => set({ diffusion: clampDiffusion(diffusion) }),
+       setLightSizeSticky: (lightSize) => set({ lightSizeSticky: clampLightSize(lightSize) }),
+diff --git a/src/store/settingsCascade.output.test.ts b/src/store/settingsCascade.output.test.ts
+new file mode 100644
+index 00000000..09079bf4
+--- /dev/null
++++ b/src/store/settingsCascade.output.test.ts
+@@ -0,0 +1,172 @@
++// Ausgabe persistence: per-Pattern layer-1 overrides (PatternRecord.settings
++// for a personal Pattern, demoOverrides for a read-only demo/example), seeded
++// before the first router frame, reset to neutral, and held back for a demo
++// until its persisted bag has loaded.
++import { afterEach, beforeEach, describe, expect, it } from 'vitest'
++import { usePatternStore, patternInitialState, type PatternRecord } from './patternStore'
++import { usePreviewStore, previewInitialState } from './previewStore'
++import { useMapStore, mapInitialState } from './mapStore'
++import {
++  ensureOutputSettingsSeeded,
++  hasActiveOverrides,
++  liveOutputAdjust,
++  liveOutputModified,
++  outputSettingsReady,
++  resetOutputSettings,
++  seedActiveSettings,
++  writeCascadedOverride,
++} from './settingsCascade'
++import {
++  getPersonalContentProvider,
++  resetPersonalContentProvider,
++  setPersonalContentProvider,
++} from '@/engine/personalContentProvider'
++import type { Settings } from '@/engine/settings'
++import { bundle } from '@/engine/bundle'
++import { loadPattern } from '@/engine/loadPattern'
++import { createRenderLoop } from '@/engine/renderLoop'
++import { createShim } from '@/engine/shim'
++import { createVirtualClock } from '@/engine/virtualClock'
++import { createPlaneMap } from '@/engine/maps'
++import { selectRenderCompatibility } from '@/engine/renderCompatibility'
++import { LIBRARIES } from '@/pixelblaze/libs'
++
++// A tiny durable backend standing in for D1 (patterns) and the settings KV
++// (demoOverrides): what is written survives a fresh store load.
++function installBackend(initial: PatternRecord[] = []) {
++  const rows = new Map(initial.map((r) => [r.id, structuredClone(r)]))
++  let demoBag: Record<string, Partial<Settings>> | undefined
++  setPersonalContentProvider({
++    ...getPersonalContentProvider(),
++    listPatterns: async () => [...rows.values()].map((r) => structuredClone(r)),
++    updatePattern: async (id, changes) => {
++      const row = rows.get(id)
++      if (row) rows.set(id, JSON.parse(JSON.stringify({ ...row, ...changes })))
++    },
++    getDemoOverrides: async () => (demoBag ? structuredClone(demoBag) : undefined),
++    setDemoOverrides: async (next) => { demoBag = JSON.parse(JSON.stringify(next)) },
++  })
++  return { rows }
++}
++
++const record = (settings?: Partial<Settings>): PatternRecord => ({ id: 'p1', name: 'P1', src: '', controls: {}, updatedAt: 1, settings })
++
++beforeEach(() => {
++  usePatternStore.setState(patternInitialState)
++  usePreviewStore.setState(previewInitialState)
++  useMapStore.setState(mapInitialState)
++})
++afterEach(() => resetPersonalContentProvider())
++
++describe('Ausgabe persistence round-trip', () => {
++  it('personal Pattern: values written by the deck survive a reload and seed on open', async () => {
++    const backend = installBackend([record()])
++    await usePatternStore.getState().loadPatterns()
++    usePatternStore.setState({ activePatternId: 'p1' })
++    writeCascadedOverride('outputBrightness', 0.4)
++    writeCascadedOverride('speed', 2.5)
++    writeCascadedOverride('outputHue', -90)
++    writeCascadedOverride('outputScale', 1.5)
++    writeCascadedOverride('outputRotate', 30)
++    await Promise.resolve()
++    expect(backend.rows.get('p1')?.settings).toMatchObject({ outputBrightness: 0.4, speed: 2.5, outputHue: -90, outputScale: 1.5, outputRotate: 30 })
++
++    // "Reload": fresh stores, records from the backend, open the Pattern.
++    usePatternStore.setState(patternInitialState)
++    usePreviewStore.setState(previewInitialState)
++    await usePatternStore.getState().loadPatterns()
++    usePatternStore.setState({ activePatternId: 'p1' })
++    seedActiveSettings()
++    expect(liveOutputAdjust()).toEqual({ brightness: 0.4, hue: -90, scale: 1.5, rotate: 30 })
++    expect(usePreviewStore.getState().speed).toBe(2.5)
++    expect(liveOutputModified()).toBe(true)
++  })
++
++  it('read-only demo: values persist in demoOverrides', async () => {
++    installBackend()
++    usePatternStore.setState({ activeDemoName: 'fastled:Blink' })
++    writeCascadedOverride('outputBrightness', 0.25)
++    await Promise.resolve()
++    usePatternStore.setState(patternInitialState)
++    await usePatternStore.getState().loadDemoOverrides()
++    usePatternStore.setState({ activeDemoName: 'fastled:Blink' })
++    seedActiveSettings()
++    expect(usePreviewStore.getState().outputBrightness).toBe(0.25)
++  })
++})
++
++describe('Ausgabe before the first router frame', () => {
++  it('ensureOutputSettingsSeeded applies the opened Pattern\'s values even before the open-time seed ran', () => {
++    // The previous Pattern (p0) left full brightness live …
++    usePatternStore.setState({ activePatternId: 'p0', userPatterns: [{ ...record(), id: 'p0' }, record({ outputBrightness: 0.5 })] })
++    seedActiveSettings()
++    expect(usePreviewStore.getState().outputBrightness).toBe(1)
++    // … p1 opens; its open-time seed effect has not run yet.
++    usePatternStore.setState({ activePatternId: 'p1' })
++    ensureOutputSettingsSeeded()
++
++    const mapPoints = createPlaneMap({ rows: 2, cols: 2 }).resolve(4)
++    const { code, metadata } = bundle('export function render2D(index, x, y) { rgb(1, 1, 1) }', LIBRARIES)
++    const shim = createShim({ mapPoints, pixelCount: 4, dimensions: 2, getVirtualTime: () => 0 })
++    const sent: number[][] = []
++    const loop = createRenderLoop({
++      handle: loadPattern(code, metadata, shim.builtins), shim, clock: createVirtualClock(), mapPoints, pixelCount: 4,
++      renderCompatibility: selectRenderCompatibility(2, metadata.renderFns),
++      getSpeed: () => usePreviewStore.getState().speed, getBrightness: () => 1, isDimmed: () => false,
++      getOutput: liveOutputAdjust,
++      paint: () => undefined,
++      paintPacked: (frame) => { sent.push(Array.from(frame, (v) => Math.round(v * 255))) },
++    })
++    loop.renderPreviewFrame()
++    expect(sent[0]).toEqual(new Array(12).fill(128))
++  })
++
++  it('does not reseed (and clobber live edits) for the same Pattern', () => {
++    usePatternStore.setState({ activePatternId: 'p1', userPatterns: [record()] })
++    seedActiveSettings()
++    usePreviewStore.getState().setOutputHue(45) // a live drag without a record home
++    ensureOutputSettingsSeeded()
++    expect(usePreviewStore.getState().outputHue).toBe(45)
++  })
++
++  it('holds a demo\'s router frames until demoOverrides loaded', async () => {
++    installBackend()
++    usePatternStore.setState({ activeDemoName: 'Rainbow' })
++    expect(outputSettingsReady()).toBe(false)
++    await usePatternStore.getState().loadDemoOverrides()
++    expect(outputSettingsReady()).toBe(true)
++    usePatternStore.setState({ activeDemoName: null, activePatternId: 'p1', demoOverridesLoaded: false })
++    expect(outputSettingsReady()).toBe(true) // personal Patterns open from loaded records
++  })
++
++  it('clamps a stored Speed above 4× (the old 10× preset)', () => {
++    usePatternStore.setState({ activePatternId: 'p1', userPatterns: [record({ speed: 10 })] })
++    seedActiveSettings()
++    expect(usePreviewStore.getState().speed).toBe(4)
++  })
++})
++
++describe('Ausgabe Zurücksetzen', () => {
++  it('drops only the five Ausgabe fields and goes neutral', async () => {
++    const backend = installBackend([record({ mapId: 'cube', outputBrightness: 0.3, speed: 3, outputHue: 10, outputScale: 2, outputRotate: -45 })])
++    await usePatternStore.getState().loadPatterns()
++    usePatternStore.setState({ activePatternId: 'p1' })
++    seedActiveSettings()
++    expect(liveOutputModified()).toBe(true)
++    await resetOutputSettings()
++    expect(liveOutputModified()).toBe(false)
++    expect(liveOutputAdjust()).toEqual({ brightness: 1, hue: 0, scale: 1, rotate: 0 })
++    expect(usePreviewStore.getState().speed).toBe(1)
++    expect(backend.rows.get('p1')?.settings).toEqual({ mapId: 'cube' })
++    expect(hasActiveOverrides()).toBe(true) // the map override stays
++  })
++
++  it('a demo bag with only Ausgabe fields disappears entirely', async () => {
++    installBackend()
++    usePatternStore.setState({ activeDemoName: 'Rainbow', demoOverrides: { Rainbow: { outputHue: 90 } } })
++    seedActiveSettings()
++    await resetOutputSettings()
++    expect(usePatternStore.getState().demoOverrides).toEqual({})
++    expect(hasActiveOverrides()).toBe(false)
++  })
++})
+diff --git a/src/store/settingsCascade.ts b/src/store/settingsCascade.ts
+index 48e3f365..01580821 100644
+--- a/src/store/settingsCascade.ts
++++ b/src/store/settingsCascade.ts
+@@ -18,6 +18,7 @@ import type { SurfaceId } from '@/engine/surfaces'
+ import { usePatternStore } from './patternStore'
+ import { usePreviewStore } from './previewStore'
+ import { useMapStore } from './mapStore'
++import { clampOutputSpeed, isOutputModified, type OutputAdjust } from '@/engine/outputAdjust'
+ 
+ // The active pattern's persisted overrides (layer 1). A user pattern stores them on
+ // its PatternRecord; a demo stores them in the keyed demoOverrides map — both
+@@ -83,9 +84,86 @@ export function seedActiveSettings(): void {
+   m.setActiveNormalizeMode(eff.normalize)
+   const pv = usePreviewStore.getState()
+   pv.setBrightness(eff.brightness)
+-  pv.setSpeed(eff.speed)
+   pv.setLightSize(eff.lightSize)
+   pv.setDiffusion(eff.diffusion)
++  applyOutputSettings(eff)
++  outputSeededFor = activeIdentity()
++}
++
++// ------------------------------------------------------------------ Ausgabe
++//
++// The five Ausgabe controls (Helligkeit, Speed, Hue, Scale, Rotate) are ordinary
++// per-pattern cascaded fields: layer 1 lives on PatternRecord.settings (user
++// Pattern) or demoOverrides (read-only demo / FastLED example), like brightness.
++// They reach the router, so they must be live BEFORE the first frame of a newly
++// opened Pattern is sent: Preview's build effect runs before its open-time seed
++// effect, so the loop calls ensureOutputSettingsSeeded() right before its
++// first frame.
++
++export const OUTPUT_FIELDS = ['outputBrightness', 'speed', 'outputHue', 'outputScale', 'outputRotate'] as const satisfies readonly (keyof Settings)[]
++
++let outputSeededFor: string | null = null
++
++function activeIdentity(): string {
++  const ps = usePatternStore.getState()
++  return ps.activeDemoName !== null ? `demo:${ps.activeDemoName}` : `pattern:${ps.activePatternId ?? ''}`
++}
++
++function applyOutputSettings(eff: Settings): void {
++  const pv = usePreviewStore.getState()
++  // Speed beyond the Ausgabe range (the old 10× preset) clamps to 4×.
++  pv.setSpeed(clampOutputSpeed(eff.speed))
++  pv.setOutputBrightness(eff.outputBrightness)
++  pv.setOutputHue(eff.outputHue)
++  pv.setOutputScale(eff.outputScale)
++  pv.setOutputRotate(eff.outputRotate)
++}
++
++/**
++ * Seeds the Ausgabe fields from the cascade when the active Pattern/demo is not
++ * the one they were last seeded for (map/layout fields are left to the normal
++ * open-time seed). Called by the preview right before the first frame.
++ */
++export function ensureOutputSettingsSeeded(): void {
++  const identity = activeIdentity()
++  if (identity === outputSeededFor) return
++  applyOutputSettings(resolveActiveSettings())
++  outputSeededFor = identity
++}
++
++/** The live Ausgabe values the render loop reads every frame. */
++export function liveOutputAdjust(): OutputAdjust {
++  const pv = usePreviewStore.getState()
++  return { brightness: pv.outputBrightness, hue: pv.outputHue, scale: pv.outputScale, rotate: pv.outputRotate }
++}
++
++export function liveOutputModified(): boolean {
++  return isOutputModified({ ...liveOutputAdjust(), speed: usePreviewStore.getState().speed })
++}
++
++/**
++ * Whether the router may receive frames for the active Pattern now: a demo's
++ * persisted Ausgabe values arrive with demoOverrides at startup; until then its
++ * frames are held back instead of going out unadjusted.
++ */
++export function outputSettingsReady(): boolean {
++  const ps = usePatternStore.getState()
++  return ps.activeDemoName === null || ps.demoOverridesLoaded
++}
++
++/**
++ * Ausgabe "Zurücksetzen": drop the five fields from the active layer-1 bag and
++ * re-seed them (neutral unless a demo recommends otherwise).
++ */
++export async function resetOutputSettings(): Promise<void> {
++  const ps = usePatternStore.getState()
++  const done = ps.activeDemoName
++    ? ps.clearDemoSettingsFields(ps.activeDemoName, OUTPUT_FIELDS)
++    : ps.activePatternId
++      ? ps.clearPatternSettingsFields(ps.activePatternId, OUTPUT_FIELDS)
++      : Promise.resolve()
++  applyOutputSettings(resolveActiveSettings())
++  await done
+ }
+ 
+ // Write a cascaded override (layer 1) for whatever is active. Routes to the user
+-- 
+2.55.0.windows.3
+

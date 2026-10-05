@@ -1,7 +1,7 @@
 From b214c2746d08882ed40ea292fa17ad2d37257da9 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 00:44:42 +1000
-Subject: [PATCH 03/14] Extract layout resolution and loop start in Preview
+Subject: [PATCH 03/15] Extract layout resolution and loop start in Preview
  (local #9002)
 
 Behaviour-preserving refactor ahead of FastLED Patterns: the main preview

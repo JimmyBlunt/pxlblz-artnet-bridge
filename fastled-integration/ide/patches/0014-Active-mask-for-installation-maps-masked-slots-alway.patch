@@ -1,7 +1,7 @@
 From 2ceaea3f28bdffc9e7926cdcfb17b07a6cd8b607 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Mon, 5 Oct 2026 20:36:58 +1100
-Subject: [PATCH 14/14] Active mask for installation maps: masked slots always
+Subject: [PATCH 14/15] Active mask for installation maps: masked slots always
  black (local #9002)
 
 The TouchDesigner installation maps (10,330 slots) contain 3,368 slots

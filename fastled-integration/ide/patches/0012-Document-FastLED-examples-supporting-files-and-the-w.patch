@@ -1,7 +1,7 @@
 From ee9bed4060824b9e41d902d697df5ff189c8462b Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 21:31:16 +1000
-Subject: [PATCH 12/14] Document FastLED examples, supporting files and the
+Subject: [PATCH 12/15] Document FastLED examples, supporting files and the
  worker (local #9002)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

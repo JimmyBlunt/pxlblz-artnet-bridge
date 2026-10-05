@@ -1,7 +1,7 @@
 From c7fca3d0549ab7a379c793e94d0d28eebd3628f9 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Mon, 5 Oct 2026 17:10:40 +1100
-Subject: [PATCH 13/14] FastLED projection onto the map (index / surface) and
+Subject: [PATCH 13/15] FastLED projection onto the map (index / surface) and
  running preview on cold load (local #9002)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

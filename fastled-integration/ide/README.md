@@ -6,11 +6,11 @@ den Art-Net/Fadecandy-Router. Sie liegen auf dem Art-Net-Stand (`pxlblz-artnet-o
 Pixel-Ausgabe) auf; ohne ihn bricht das Skript ab.
 
 ```
-patches/0001-…0014-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
+patches/0001-…0015-*.patch   git format-patch pxlblz-artnet-output..feature/fastled
 install-fastled-ide.ps1        spielt sie per git am --3way ein (idempotent)
 ```
 
-Stand der Serie: IDE `feature/fastled` @ 2ceaea3f, Basis `pxlblz-artnet-output` @ 071002e9
+Stand der Serie: IDE `feature/fastled` @ c47575b5, Basis `pxlblz-artnet-output` @ 071002e9
 (= upstream 21b764ab + 2 lokale Art-Net-Commits). Host-ABI der wasm-Engine: 1.
 
 ## Einspielen
@@ -35,6 +35,9 @@ powershell -ExecutionPolicy Bypass -File .\install-fastled-ide.ps1 -IdePath E:\P
   gespeichert. Compilerfehler erscheinen als Marker im Editor.
 - Eingefügter FastLED-Code ohne Marker → Leiste „Convert to FastLED Pattern“.
 - Mit `?pxout=1` gehen die Leitungsbytes (L2, nach Helligkeit/Korrektur/Dithering) exakt an den Router.
+- Deck-Abschnitt **Ausgabe** (jedes Pattern): Helligkeit, Speed, Hue, Scale, Rotate wirken auf Vorschau
+  und Router, pro Pattern gespeichert. Neutral (100 %, 1×, 0°, 1×, 0°) = bit-exakt; sonst Hinweis
+  „Ausgabe verändert“. Der Sonnen-Regler oben ist nur Monitor-Helligkeit.
 - Nie an einen Pixelblaze gesendet, nicht in Shows, nicht in der Agent-Discovery, kein .epe-Download.
 
 ## Nachziehen nach einem Upstream-Update der IDE

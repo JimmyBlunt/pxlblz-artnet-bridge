@@ -1,7 +1,7 @@
 From d3317d752c2fa017849d91b9b819857c4baca8af Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 01:26:56 +1000
-Subject: [PATCH 07/14] Keep FastLED Patterns away from Controllers, Shows and
+Subject: [PATCH 07/15] Keep FastLED Patterns away from Controllers, Shows and
  the agent (local #9002)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

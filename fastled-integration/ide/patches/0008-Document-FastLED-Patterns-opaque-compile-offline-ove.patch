@@ -1,7 +1,7 @@
 From c3784d35e24a0289f8706216a6b409088c7edf67 Mon Sep 17 00:00:00 2001
 From: JimmyBlunt <jo@paso-music.de>
 Date: Sat, 3 Oct 2026 04:58:25 +1000
-Subject: [PATCH 08/14] Document FastLED Patterns; opaque compile/offline
+Subject: [PATCH 08/15] Document FastLED Patterns; opaque compile/offline
  overlay (local #9002)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
