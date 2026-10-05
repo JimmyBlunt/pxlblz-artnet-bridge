@@ -370,7 +370,8 @@ export function definesBeforeFastLED(source) {
 }
 
 export function sketchKey(cfg, target, source, defines, options = {}, files = {}) {
-  return sha(JSON.stringify({ lib: libKey(cfg, target), source, defines: defines || {}, files, p: options.autoPrototypes !== false, o: options.optimize || 'fast', n: options.fileName || '' })).slice(0, 24);
+  // compat: sketch-side Arduino compatibility headers + flags (toolchain/compat), not part of the library key
+  return sha(JSON.stringify({ lib: libKey(cfg, target), compat: dirHash(path.join(ROOT, 'toolchain', 'compat')) + ':narrowing', source, defines: defines || {}, files, p: options.autoPrototypes !== false, o: options.optimize || 'fast', n: options.fileName || '' })).slice(0, 24);
 }
 
 // Sketch-folder file model (documented in README.md, "Mehrdatei-Sketches"):
@@ -437,9 +438,13 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
   const pchFor = (tu) => options.pch !== false && !definesBeforeFastLED(tu.text);
   timings.pch = pchFor(tus[0]);
   // at most cfg.jobs compiler processes at once (sketches like AutoResearch have 40+ TUs)
-  const ccs = await pool(tus, cfg.jobs, (tu) => run(cfg.zig, ['c++', ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-I' + dir,
-    ...(pchFor(tu) ? ['-include-pch', lib.pch] : ['-include', path.join(ROOT, 'toolchain', 'include', 'pxl_sketch.h')]), ...definesToFlags(defines),
-    '-Wall', '-Wno-unused-variable', '-Wno-unused-function', '-fno-caret-diagnostics',
+  // Sketch TUs only: toolchain/compat first on the include path (FastLED.h wrapper with the
+  // Arduino compatibility names), and gcc-like leniency for narrowing in initializer lists
+  // (the Arduino/Teensy gcc only warns). The precompiled library is built without either.
+  const compat = path.join(ROOT, 'toolchain', 'compat');
+  const ccs = await pool(tus, cfg.jobs, (tu) => run(cfg.zig, ['c++', '-I' + compat, ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-I' + dir,
+    ...(pchFor(tu) ? ['-include-pch', lib.pch, '-include', path.join(compat, 'pxl_arduino_compat.h')] : ['-include', path.join(ROOT, 'toolchain', 'include', 'pxl_sketch.h')]), ...definesToFlags(defines),
+    '-Wall', '-Wno-unused-variable', '-Wno-unused-function', '-Wno-c++11-narrowing', '-fno-caret-diagnostics',
     ...(tu.src.endsWith('.c') ? ['-x', 'c++'] : []), '-c', tu.src, '-o', tu.obj], { env, cwd: dir, signal }));
   timings.compileMs = Math.max(...ccs.map((c) => c.ms));
   let diagnostics = ccs.flatMap((c) => parseDiagnostics(c.err, fileName, Object.keys(files), dir));
