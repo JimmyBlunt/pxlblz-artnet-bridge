@@ -19,7 +19,8 @@ export function loadConfig() {
   cfg.zig = abs(process.env.PXL_ZIG || cfg.zig);
   cfg.cacheDir = abs(cfg.cacheDir || '.cache');
   cfg.buildDir = abs(cfg.buildDir || 'build');
-  cfg.jobs = cfg.jobs || 3;
+  // PXL_JOBS: at most this many compiler processes at once (e.g. 1 on a machine low on memory)
+  cfg.jobs = +process.env.PXL_JOBS || cfg.jobs || 3;
   return cfg;
 }
 
@@ -231,6 +232,48 @@ export async function buildLib(cfg, target, { log = console.log, force = false }
   return { archive, runtimeObj, extraObjs, pch, key, cached: false, ms };
 }
 
+// ------------------------------------------------------------------ Arduino compatibility (sketch sources)
+// The two compat items no header can provide (README "Arduino-Kompatibilität",
+// toolchain/compat/pxl_arduino_compat.h). Both only touch code that would not compile
+// otherwise, so sketches that compiled before produce identical results.
+// Bump COMPAT_SOURCE_REV when they change (part of the sketch cache key).
+export const COMPAT_SOURCE_REV = 'struct-crgb+index:1';
+// Comments and string/char literals blanked (same length, newlines kept), for scanning.
+export function maskCode(src) {
+  return src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+// "struct CRGB x;" / "struct CRGB *p" (FastLED < 3.10, where CRGB was a struct): CRGB is now
+// an alias of fl::CRGB and an alias cannot follow 'struct'. 'struct' is blanked to spaces
+// (columns and lines stay exact) wherever it names CRGB as a type; a definition of an own
+// 'struct CRGB {' / 'struct CRGB : base' is left alone.
+export function compatStructCrgb(text) {
+  if (!/\bstruct\s+CRGB\b/.test(text)) return text;
+  const masked = maskCode(text);
+  const re = /\bstruct(?=\s+CRGB\b(?!\s*(?:\{|:(?!:))))/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(masked))) { out += text.slice(last, m.index) + '      '; last = m.index + 6; }
+  return last ? out + text.slice(last) : text;
+}
+// True if the code declares a variable named 'index' at file scope (outside braces and
+// parentheses): "uint8_t index = 0;", "int index;", "byte index[8];", "int a, index;".
+export function declaresGlobalIndex(text) {
+  if (!/\bindex\b/.test(text)) return false;
+  const masked = maskCode(text);
+  let brace = 0, paren = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === '{') brace++; else if (c === '}') brace = Math.max(0, brace - 1);
+    else if (c === '(') paren++; else if (c === ')') paren = Math.max(0, paren - 1);
+    else if (c === 'i' && brace === 0 && paren === 0 && masked.startsWith('index', i) && !/[\w$]/.test(masked[i - 1] || '') && !/[\w$]/.test(masked[i + 5] || '')) {
+      const before = masked.slice(Math.max(0, i - 80), i).replace(/\s+$/, '');
+      const after = masked.slice(i + 5).replace(/^\s+/, '');
+      if (/[\w*&,]$/.test(before) && !/\b(?:return|case|goto)$/.test(before) && /^[=;\[,]/.test(after) && !after.startsWith('==')) return true;
+    }
+  }
+  return false;
+}
+const isCodeFile = (name) => /\.(h|hh|hpp|hxx|inc|ipp|tpp|c|cpp|cc|cxx|ino|pde)$/.test(name);
+
 // ------------------------------------------------------------------ sketch preprocessing
 // Arduino IDE semantics: an implicit #include <Arduino.h> (force-include) and
 // automatically generated prototypes for functions defined at top level, so
@@ -370,8 +413,9 @@ export function definesBeforeFastLED(source) {
 }
 
 export function sketchKey(cfg, target, source, defines, options = {}, files = {}) {
-  // compat: sketch-side Arduino compatibility headers + flags (toolchain/compat), not part of the library key
-  return sha(JSON.stringify({ lib: libKey(cfg, target), compat: dirHash(path.join(ROOT, 'toolchain', 'compat')) + ':narrowing', source, defines: defines || {}, files, p: options.autoPrototypes !== false, o: options.optimize || 'fast', n: options.fileName || '' })).slice(0, 24);
+  // compat: sketch-side Arduino compatibility (toolchain/compat, toolchain/compat-libs, flags,
+  // COMPAT_SOURCE_REV source transforms), not part of the library key
+  return sha(JSON.stringify({ lib: libKey(cfg, target), compat: dirHash(path.join(ROOT, 'toolchain', 'compat')) + dirHash(path.join(ROOT, 'toolchain', 'compat-libs')) + ':narrowing:' + COMPAT_SOURCE_REV, source, defines: defines || {}, files, p: options.autoPrototypes !== false, o: options.optimize || 'fast', n: options.fileName || '' })).slice(0, 24);
 }
 
 // Sketch-folder file model (documented in README.md, "Mehrdatei-Sketches"):
@@ -414,8 +458,13 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
   const fileName = options.fileName || 'sketch.ino';
   // Arduino: secondary .ino tabs are appended to the main sketch (alphabetical order).
   const inoNames = Object.keys(files).filter(isIno).filter((n) => n !== fileName).sort();
-  let fullSource = source;
+  // Arduino compatibility on the sources (see compatStructCrgb / declaresGlobalIndex); the
+  // cache key above is computed from the unmodified texts.
+  files = Object.fromEntries(Object.entries(files).map(([n, t]) => [n, isCodeFile(n) ? compatStructCrgb(t) : t]));
+  let fullSource = compatStructCrgb(source);
   for (const n of inoNames) fullSource += `\n#line 1 "${n}"\n` + files[n].replace(/\r\n?/g, '\n') + '\n';
+  // A header of the folder declaring a global 'index' affects every TU (any of them may include it).
+  const headerIndex = Object.entries(files).some(([n, t]) => isCodeFile(n) && !isTU(n) && !isIno(n) && declaresGlobalIndex(t));
   const pre = options.autoPrototypes === false ? { code: `#line 1 "${fileName}"\n${fullSource}\n`, prototypes: [] } : preprocessSketch(fullSource, fileName);
   const srcFile = path.join(dir, 'sketch.ino.cpp');
   fs.writeFileSync(srcFile, pre.code);
@@ -428,9 +477,9 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
   const env = zigEnv(cfg);
   const flags = targetFlags(cfg, target);
   const timings = {};
-  const tus = [{ src: srcFile, obj: path.join(dir, 'sketch.o'), diagName: fileName, text: source }];
+  const tus = [{ src: srcFile, obj: path.join(dir, 'sketch.o'), diagName: fileName, text: source, renameIndex: headerIndex || declaresGlobalIndex(fullSource) }];
   for (const name of Object.keys(files).filter(isTU).sort()) {
-    tus.push({ src: path.join(dir, ...name.split('/')), obj: path.join(dir, 'obj', name.replace(/[\\/]/g, '__') + '.o'), diagName: name, text: files[name] });
+    tus.push({ src: path.join(dir, ...name.split('/')), obj: path.join(dir, 'obj', name.replace(/[\\/]/g, '__') + '.o'), diagName: name, text: files[name], renameIndex: headerIndex || declaresGlobalIndex(files[name]) });
   }
   if (tus.length > 1) fs.mkdirSync(path.join(dir, 'obj'), { recursive: true });
   // Each TU uses the precompiled FastLED prefix unless it #defines something before its
@@ -439,11 +488,15 @@ export async function compileSketch(cfg, { source, defines = {}, files = {}, tar
   timings.pch = pchFor(tus[0]);
   // at most cfg.jobs compiler processes at once (sketches like AutoResearch have 40+ TUs)
   // Sketch TUs only: toolchain/compat first on the include path (FastLED.h wrapper with the
-  // Arduino compatibility names), and gcc-like leniency for narrowing in initializer lists
-  // (the Arduino/Teensy gcc only warns). The precompiled library is built without either.
+  // Arduino compatibility names), toolchain/compat-libs after the sketch folder (bundled
+  // stand-ins for OctoWS2811, neomatrix_config.h, Adafruit_GFX ...; a sketch's own header of
+  // the same name wins), and gcc-like leniency for narrowing in initializer lists (the
+  // Arduino/Teensy gcc only warns). The precompiled library is built without any of these.
   const compat = path.join(ROOT, 'toolchain', 'compat');
-  const ccs = await pool(tus, cfg.jobs, (tu) => run(cfg.zig, ['c++', '-I' + compat, ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-I' + dir,
+  const compatLibs = path.join(ROOT, 'toolchain', 'compat-libs');
+  const ccs = await pool(tus, cfg.jobs, (tu) => run(cfg.zig, ['c++', '-I' + compat, ...flags, '-I' + path.join(ROOT, 'toolchain', 'include'), '-I' + dir, '-I' + compatLibs,
     ...(pchFor(tu) ? ['-include-pch', lib.pch, '-include', path.join(compat, 'pxl_arduino_compat.h')] : ['-include', path.join(ROOT, 'toolchain', 'include', 'pxl_sketch.h')]), ...definesToFlags(defines),
+    ...(tu.renameIndex ? ['-DPXL_COMPAT_RENAME_INDEX=1'] : []),
     '-Wall', '-Wno-unused-variable', '-Wno-unused-function', '-Wno-c++11-narrowing', '-fno-caret-diagnostics',
     ...(tu.src.endsWith('.c') ? ['-x', 'c++'] : []), '-c', tu.src, '-o', tu.obj], { env, cwd: dir, signal }));
   timings.compileMs = Math.max(...ccs.map((c) => c.ms));

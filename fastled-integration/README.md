@@ -137,6 +137,54 @@ zur einbindenden Datei auf, der Sketch-Ordner ist zusätzlich im Include-Pfad. E
 ein Makro definiert, wird ohne PCH übersetzt. Pfade: `/`-getrennt, kein `..`, nichts Absolutes/Verstecktes (sonst HTTP 400).
 Diagnosen tragen den relativen Pfad (`src/wave.cpp`, `Tab2.ino`). Höchstens `jobs` Compiler gleichzeitig. Test: `npm run test:multifile`.
 
+## Arduino-Kompatibilität
+
+Für importierte, ältere Arduino-/FastLED-Sketches. Alles wirkt **nur auf Sketch-Übersetzungseinheiten**; die
+vorkompilierte Lib und der PCH bleiben unverändert (kein Neubau). Es werden nur fehlende Namen ergänzt bzw. Code
+angepasst, der sonst nicht kompiliert – Sketches, die vorher liefen, liefern dieselben Bytes (`npm run verify`).
+
+`toolchain/compat/pxl_arduino_compat.h` (nach `FastLED.h`: im PCH-Pfad per `-include`, sonst über den Wrapper `toolchain/compat/FastLED.h`):
+
+| Punkt | Lösung |
+|---|---|
+| `dim8_video/dim8_lin/brighten8_*` | `using fl::…` (FastLED 3.10 exportiert sie nicht mehr global) |
+| `memcpy/memmove/memset/memcmp` auf CRGB-Puffern (mehrdeutig mit `fl::memcpy` via ADL) | typisierte Überladungen `template<class T> f(T*, const T*, size_t)` |
+| `FASTLED_USING_NAMESPACE` | leeres Makro |
+| `PI`, `HALF_PI`, `TWO_PI`, `DEG_TO_RAD`, `RAD_TO_DEG` | Arduino-Werte, exakt dieselbe Tokenfolge wie Arduino.h (FastLEDs animartrix-Header definiert `PI` gleich → keine Warnung) |
+| `DEFAULT`, `EXTERNAL`, `INTERNAL`, `INTERNAL1V1`, `INTERNAL2V56` | AVR-Werte (`analogReference()` ist ein Stub) |
+| `DMAMEM`, `FASTMEM`, `FLASHMEM`, `EXTMEM`, `PROGMEM` | leer (normaler RAM) |
+| `pgm_read_byte/word/dword/float/ptr` (+ `_near/_far`), `memcpy_P`, `strcpy_P`, `strlen_P`, `strcmp_P`, `PSTR`, `PGM_P` | direkte Speicherzugriffe |
+| Binärkonstanten `B0` … `B11111111` | `toolchain/compat/pxl_binary.h` (Arduino binary.h, 510 Makros) |
+| `Serial.parseInt/parseFloat/readString/setTimeout/find` | liefern „nichts empfangen“ (keine serielle Eingabe am PC) |
+
+Zwei Punkte kann kein Header lösen; sie stecken in `toolchain/toolchain.mjs` (`COMPAT_SOURCE_REV`, Teil des Cache-Schlüssels):
+
+- **`struct CRGB x;` / `struct CRGB *p`** (FastLED < 3.10, 34 Sketches der Sammlung, u. a. fast alle Tuline-Demos): `CRGB` ist jetzt
+  `using CRGB = fl::CRGB`, und C++ verbietet `struct` vor einem Alias ([dcl.type.elab]). Ein Makro `#define CRGB ::fl::CRGB` würde
+  `fl::CRGB` brechen (45 Katalogbeispiele). Daher ersetzt `compatStructCrgb()` beim Übersetzen in Sketch-Quellen (`.ino/.h/.cpp…`
+  des Ordners, nicht in Kommentaren/Strings) `struct` vor `CRGB` durch 6 Leerzeichen – Zeilen und Spalten der Diagnosen bleiben exakt.
+  Eine eigene Definition `struct CRGB {` bzw. `struct CRGB : …` bleibt unberührt. Der Nutzer-Quelltext selbst wird nicht verändert.
+- **Globale Variable `index`** (`uint8_t index = 0;`, z. B. Tulines inoise8_fire, FunkyNoise): kollidiert mit POSIX `char *index(const char*, int)`
+  aus wasi-libcs `<strings.h>` (durch `-std=gnu++17` ist `_BSD_SOURCE` aktiv; der PCH hat den Header schon eingebunden, die
+  Deklaration lässt sich also nicht verbergen, und `-std=c++17` würde den PCH ändern). `declaresGlobalIndex()` erkennt eine
+  Deklaration auf Dateiebene (außerhalb von `{}`/`()`); nur dann bekommt diese Einheit `-DPXL_COMPAT_RENAME_INDEX`, und der Compat-Header
+  setzt `#define index pxl_sketch_index` (gilt danach konsistent für die ganze Einheit). Einheiten ohne solche Variable bleiben unberührt.
+
+**Mitgelieferte Bibliotheken** `toolchain/compat-libs/` (im Include-Pfad **nach** dem Sketch-Ordner – eine gleichnamige Datei des Sketches gewinnt):
+
+| Datei | Inhalt |
+|---|---|
+| `OctoWS2811.h` | PJRC-Teensy-DMA-Treiber als Senke; der eigene `CTeensy4Controller` des Sketches registriert sich weiter per `FastLED.addLeds(ctrl, leds, n)` (Ausgabe L1) |
+| `neomatrix_config.h`, `pxl_neomatrix_config.h` | Ersatz für Marc Merlins `neomatrix_config.h`: **ein** FastLED-Controller (NEOPIXEL, L2), zeilenweises `mw × mh`-Raster mit `setScreenMap(mw, mh)` → die Flächen-Projektion der IDE erkennt das Raster. Globals wie im M32BY8X3-Block (`matrixleds`, `matrix`, `mw/mh`, `NUM_LEDS`, `kMatrixWidth`, `gHue`, `speed`, `XY()`, `matrix_setup()` …). Standard 24 × 32, Helligkeit 64; andere Werte über eine kurze eigene `neomatrix_config.h` im Sketch (`#define PXL_MATRIX_WIDTH/HEIGHT/BRIGHTNESS`, `PXL_MATRIXLEDS2`, `PXL_NO_GHUE`, `PXL_NO_SPEED`, dann `#include <pxl_neomatrix_config.h>`) |
+| `Adafruit_GFX.h`, `Framebuffer_GFX.h`, `FastLED_NeoMatrix.h` | Zeichen-API (Pixel, Linien, Rechtecke, Kreise, Dreiecke, Bitmaps; 565-/24-Bit-/CRGB-Farben); Text/Fonts kompilieren als No-op |
+| `LEDMatrix.h` | `cLEDMatrix` (Zeichenfunktionen, Shift/Mirror) auf demselben Raster |
+| `Adafruit_NeoPixel.h` | No-op (nur eingebunden, nicht genutzt) |
+| `avr/pgmspace.h` | leer; die Makros kommen aus dem Compat-Header |
+
+Diese Header sind eigene, vereinfachte Nachbauten (keine Kopien der Originalbibliotheken).
+
+Speicherknappe Rechner: `PXL_JOBS=1` (höchstens ein Compiler gleichzeitig) und `PXL_MAX_PARALLEL=1` (Dienst: ein Compile gleichzeitig) überschreiben `config.json`.
+
 ## Beispielkatalog
 
 `catalog/`: alle 114 offiziellen FastLED-Beispiele mit Quelltext, Kategorie, Probelauf-Ergebnis, Geometrie und deutschem
@@ -203,6 +251,8 @@ runtime/fastledWasmHost.ts     JS-Host
 toolchain/toolchain.mjs        Build-/Compile-Logik (zig, PCH, Asyncify, Diagnosen, Prototypen)
 toolchain/build.mjs, setup.mjs, pins.json, fastled-local.patch, pxl_prelude.h
 toolchain/include/             Arduino.h, pxl_sketch.h, pxl_sketch_fastled.h (PCH)
+toolchain/compat/              Arduino-Kompatibilität für Sketch-Einheiten (FastLED.h-Wrapper, pxl_arduino_compat.h, pxl_binary.h)
+toolchain/compat-libs/         mitgelieferte Ersatz-Bibliotheken (OctoWS2811, neomatrix_config, Adafruit_GFX …)
 toolchain/override/platforms/  die Override-Header (Kopien ganzer Upstream-Dateien)
 native/harness.cpp, native/fiber_win.cpp   native Referenz;  native/libm_ref.zig  libm-Angleichung der Referenz
 catalog/                       Beispielkatalog (build-catalog.mjs, fastled-examples.json, examples/, screenmaps/)

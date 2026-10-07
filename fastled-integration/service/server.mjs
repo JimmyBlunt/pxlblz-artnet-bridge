@@ -22,7 +22,7 @@ const svc = cfg.service || {};
 const HOST = arg('--host') || process.env.PXL_FASTLED_HOST || svc.host || '127.0.0.1';
 const PORT = +(arg('--port') || process.env.PXL_FASTLED_PORT || svc.port || 9996);
 const ORIGINS = new Set(svc.origins || ['http://localhost:5174', 'http://localhost:5175']);
-const MAX_PARALLEL = svc.maxParallel || 2;
+const MAX_PARALLEL = +process.env.PXL_MAX_PARALLEL || svc.maxParallel || 2; // PXL_MAX_PARALLEL: e.g. 1 on a machine low on memory
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 

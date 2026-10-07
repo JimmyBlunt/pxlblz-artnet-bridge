@@ -331,27 +331,36 @@ export class FastLedHost {
 
   ledCount(): number { return this.ex.pxl_led_count(); }
 
+  // Getters: call every wasm export (pointer, length, count) BEFORE touching memory.buffer.
+  // An export may grow the wasm memory (malloc, lazy wire encoding), which detaches the old
+  // ArrayBuffer; a view created from the buffer read earlier would then throw
+  // ("Cannot perform DataView constructor on a detached ArrayBuffer") or read stale memory.
+
   /** L1 (RGB888, 3*ledCount). View into wasm memory: copy it if you keep it across frame() calls. */
   getLeds(): Uint8Array {
     const p = this.ex.pxl_leds_ptr();
-    return new Uint8Array(this.ex.memory.buffer, p, this.ledCount() * 3);
+    const len = this.ledCount() * 3;
+    return new Uint8Array(this.ex.memory.buffer, p, len);
   }
 
   /** L2 in RGB order (3*ledCount). View into wasm memory. */
   getWire(): Uint8Array {
     const p = this.ex.pxl_wire_rgb_ptr();
-    return new Uint8Array(this.ex.memory.buffer, p, this.ledCount() * 3);
+    const len = this.ledCount() * 3;
+    return new Uint8Array(this.ex.memory.buffer, p, len);
   }
 
   /** L2 exactly as on the data pins (controller COLOR_ORDER, RGBW expansion), all strips concatenated. */
   getWireRaw(): Uint8Array {
     const p = this.ex.pxl_wire_raw_ptr();
-    return new Uint8Array(this.ex.memory.buffer, p, this.ex.pxl_wire_raw_len());
+    const len = this.ex.pxl_wire_raw_len();
+    return new Uint8Array(this.ex.memory.buffer, p, len);
   }
 
   getStrips(): FastLedStrip[] {
     const n = this.ex.pxl_strip_count();
-    const dv = new DataView(this.ex.memory.buffer, this.ex.pxl_strips_ptr(), n * 40);
+    const p = this.ex.pxl_strips_ptr();
+    const dv = new DataView(this.ex.memory.buffer, p, n * 40);
     const out: FastLedStrip[] = [];
     for (let i = 0; i < n; i++) {
       const g = (k: number) => dv.getInt32(i * 40 + k * 4, true);
